@@ -2,7 +2,7 @@
 
 Requirements:
 
-* VPS
+* VPS or 24-hour running machine with constant internet connection
 * Static IP Address
 * Telegram Bot Token
 * A Telegram channel the bot will send media to.
