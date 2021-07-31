@@ -18,6 +18,11 @@ def extract_link(raw):
     link = matches.group(0).strip()
     return link
 
+def extract_channel_name(raw):
+    raw = raw.decode('utf-8')
+    matches = re.search(r"(?<=\<\name\>).+(?=\</\name\>)", raw)
+    return matches.group(0).strip()
+
 @APP.route('/', methods=['GET','POST'])
 def receive_webhook():
     if request.method == 'GET':
@@ -30,10 +35,11 @@ def receive_webhook():
         os.system(fr"""youtube-dl -x {link} --audio-format mp3 --audio-quality 0 -o "%(title)s.%(ext)s" --embed-thumbnail --metadata-from-title "%(artist)s - %(title)s" """)
 
         basename = str(check_output(f'youtube-dl {link} -e'))[2:-3]
+        channel_name = extract_channel_name(request.data)
 
         audio_file_path = basename + '.mp3'
         thumb = str(check_output(f'youtube-dl {link} --get-thumbnail'))[2:-3]
-        bot.send_audio(str(CHANNEL), audio=open(audio_file_path, 'rb'), thumb=thumb, timeout=60)
+        bot.send_audio(str(CHANNEL), audio=open(audio_file_path, 'rb'), thumb=thumb, caption='#'+channel_name, timeout=60)
     return '200'
 
 if __name__ == '__main__':
