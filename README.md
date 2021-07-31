@@ -1,19 +1,27 @@
 # autouploadbot
 
-Requirements:
+# Requirements:
 
 * VPS or 24-hour running machine with constant internet connection
 * Static IP Address
 * Telegram Bot Token
 * A Telegram channel the bot will send media to.
 
-Packages:
+# Packages:
 
 * pyTelegramBotAPI
 * Flask
 * youtube-dl
 
-Set up the bot:
+# Launch:
+
+Windows:  ```set FLASK_APP=main.py && flask run --port= --host=0.0.0.0```
+
+Linux:    ```FLASK_APP=main.py flask run --port= --host=0.0.0.0```
+
+P.S: Define the port you want to use (80 is a usual port)
+
+# Set up the bot:
 
 1. Provide token of your bot to the program.
 2. Subscribe to YouTube channels via [this service](https://pubsubhubbub.appspot.com/subscribe). You can read the instructions [here](https://developers.google.com/youtube/v3/guides/push_notifications)
