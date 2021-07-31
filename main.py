@@ -7,6 +7,7 @@ import os
 from subprocess import check_output
 
 API_TOKEN = input("Token: ")
+CHANNEL = input("Channel ID or @username: ")
 APP = Flask(__name__)
 
 bot = telebot.TeleBot(API_TOKEN, parse_mode='MarkdownV2')
@@ -32,7 +33,7 @@ def receive_webhook():
 
         audio_file_path = basename + '.mp3'
         thumb = str(check_output(f'youtube-dl {link} --get-thumbnail'))[2:-3]
-        bot.send_audio('@om1ji_autolibrary', audio=open(audio_file_path, 'rb'), thumb=thumb, timeout=60)
+        bot.send_audio(str(CHANNEL), audio=open(audio_file_path, 'rb'), thumb=thumb, timeout=60)
     return '200'
 
 if __name__ == '__main__':
