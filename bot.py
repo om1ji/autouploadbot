@@ -1,6 +1,7 @@
 import re
 import os
 from subprocess import check_output
+from typing import Coroutine
 from telebot import TeleBot
 from config import API_TOKEN, CHANNEL
 from json import loads
@@ -9,6 +10,9 @@ import sqlite3
 YOUTUBE_LINK_REGEX = r"http(?:s?):\/\/(?:www\.)?youtu(?:be\.com\/watch\?v=|\.be\/)([\w\-\_]*)(&(amp;)?‌​[\w\?‌​=]*)?"
 
 bot = TeleBot(API_TOKEN)
+
+con = sqlite3.connect('files_ids.db', check_same_thread=False)
+cur = con.cursor()
 
 def extract_link(raw):
     raw = raw.decode('utf-8')
@@ -21,12 +25,6 @@ def str2sec(x):
     return int(m)*60 + int(s)
 
 def send_release(message=None, rawdata=None):
-
-    con = sqlite3.connect('files_ids.db')
-    cur = con.cursor()
-    cur.execute("""CREATE TABLE IF NOT EXISTS file_ids
-                    (video_id, file_id)""")
-    con.commit()
 
     if rawdata is not None:
         link = extract_link(rawdata.data)
@@ -47,13 +45,19 @@ def send_release(message=None, rawdata=None):
     if rawdata is not None:
         caption = "#"+channel_name
 
-        if cur.execute("SELECT EXISTS(SELECT 1 FROM file_ids WHERE video_id='{video_id}'", )
-
-        bot.send_audio(CHANNEL, 
-                    audio=open(audio_file_path, 'rb'), 
-                    caption=caption,
-                    duration=duration,
-                    timeout=60)
+        if cur.execute(f"SELECT EXISTS(SELECT 1 FROM file_ids WHERE video_id={video_id})").fetchone():
+            file_id = cur.execute(f"SELECT file_id FROM file_ids WHERE video_id ='{video_id}'")
+            con.commit()
+            bot.send_audio(message.chat.id, file_id)
+        else:
+            r = bot.send_audio(CHANNEL, 
+                            audio=open(audio_file_path, 'rb'), 
+                            caption=caption,
+                            duration=duration,
+                            timeout=60)
+                
+            cur.execute(f"INSERT INTO file_ids VALUES ('{video_id}','{r.audio.file_id}')")
+            con.commit()
     else:
         return open(audio_file_path, 'rb')
 
@@ -75,6 +79,9 @@ def echo(message):
     bot.reply_to(message, message.text)
 
 if __name__=='__main__':
+    cur.execute("""CREATE TABLE IF NOT EXISTS file_ids
+                    (video_id TEXT, 
+                    file_id TEXT)""")
     bot.polling(none_stop=True)
 
 # TODO Поддержка UTF8 в :47
