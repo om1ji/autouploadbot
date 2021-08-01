@@ -3,6 +3,8 @@ import os
 from subprocess import check_output
 from telebot import TeleBot
 from config import API_TOKEN, CHANNEL
+from json import loads
+import sqlite3
 
 YOUTUBE_LINK_REGEX = r"http(?:s?):\/\/(?:www\.)?youtu(?:be\.com\/watch\?v=|\.be\/)([\w\-\_]*)(&(amp;)?‌​[\w\?‌​=]*)?"
 
@@ -18,11 +20,14 @@ def str2sec(x):
     m, s = x.strip().split(':')
     return int(m)*60 + int(s)
 
-def extract_channel_name(raw):
-    raw = raw.decode('utf-8')
-    return re.search(r"<name>(.*?)<\/name>", raw).group(0).strip()[6:-7].replace(' ', '_')
-
 def send_release(message=None, rawdata=None):
+
+    con = sqlite3.connect('files_ids.db')
+    cur = con.cursor()
+    cur.execute("""CREATE TABLE IF NOT EXISTS file_ids
+                    (video_id, file_id)""")
+    con.commit()
+
     if rawdata is not None:
         link = extract_link(rawdata.data)
     elif message is not None:
@@ -30,15 +35,21 @@ def send_release(message=None, rawdata=None):
 
     os.system(fr"""youtube-dl -x {link} --audio-format mp3 --audio-quality 0 -o "%(title)s.%(ext)s" --encoding 'utf-8' -w --embed-thumbnail --metadata-from-title "%(artist)s - %(title)s" """)
 
-    basename = str(check_output(f'youtube-dl {link} -e', shell=True))[2:-3]
+    info = loads(check_output(f'youtube-dl -s -j {link}', shell=True))
+
+    duration = info['duration']
+    channel_name = info['uploader']
+    video_id = info['display_id']
+    basename = info['title']
 
     audio_file_path = basename + '.mp3'
-    duration = str2sec(str(check_output(f'youtube-dl {link} -s --get-duration', shell=True))[2:-3])
-    
+
     if rawdata is not None:
-        caption = "#"+extract_channel_name(rawdata.data)
-        print(caption)
-        bot.send_audio(str(CHANNEL), 
+        caption = "#"+channel_name
+
+        if cur.execute("SELECT EXISTS(SELECT 1 FROM file_ids WHERE video_id='{video_id}'", )
+
+        bot.send_audio(CHANNEL, 
                     audio=open(audio_file_path, 'rb'), 
                     caption=caption,
                     duration=duration,
@@ -48,8 +59,7 @@ def send_release(message=None, rawdata=None):
 
 @bot.message_handler(regexp=YOUTUBE_LINK_REGEX)
 def send(message):
-    matches = re.search(YOUTUBE_LINK_REGEX, message.text)
-    text = matches.group(0).strip()
+    text = re.search(YOUTUBE_LINK_REGEX, message.text).group(0).strip()
     bot.send_audio(message.chat.id, send_release(message=text))
 
 @bot.message_handler(commands=['start', 'help'])
@@ -67,7 +77,6 @@ def echo(message):
 if __name__=='__main__':
     bot.polling(none_stop=True)
 
-# TODO Поддержка UTF8 в :41
+# TODO Поддержка UTF8 в :47
 # TODO Логи
 # TODO Очередь в базе данных
-# TODO Если уже залит, то file_id

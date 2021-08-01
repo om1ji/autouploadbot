@@ -2,3 +2,4 @@ __pycache__
 tgbot
 config.py
 .gitignore
+files_ids.db
