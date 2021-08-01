@@ -6,7 +6,7 @@ from config import API_TOKEN, CHANNEL
 
 YOUTUBE_LINK_REGEX = r"http(?:s?):\/\/(?:www\.)?youtu(?:be\.com\/watch\?v=|\.be\/)([\w\-\_]*)(&(amp;)?‌​[\w\?‌​=]*)?"
 
-bot = TeleBot(API_TOKEN, parse_mode='MarkdownV2')
+bot = TeleBot(API_TOKEN)
 
 def extract_link(raw):
     raw = raw.decode('utf-8')
@@ -14,10 +14,13 @@ def extract_link(raw):
     link = matches.group(0).strip()
     return link
 
+def str2sec(x):
+    m, s = x.strip().split(':')
+    return int(m)*60 + int(s)
+
 def extract_channel_name(raw):
     raw = raw.decode('utf-8')
-    matches = re.search(r"(?<=\<\name\>).+(?=\</\name\>)", raw)
-    return matches.group(0).strip()
+    return re.search(r"<name>(.*?)<\/name>", raw).group(0).strip()[6:-7].replace(' ', '_')
 
 def send_release(message=None, rawdata=None):
     if rawdata is not None:
@@ -30,12 +33,15 @@ def send_release(message=None, rawdata=None):
     basename = str(check_output(f'youtube-dl {link} -e', shell=True))[2:-3]
 
     audio_file_path = basename + '.mp3'
-    thumb = str(check_output(f'youtube-dl {link} --get-thumbnail', shell=True))[2:-3]
+    duration = str2sec(str(check_output(f'youtube-dl {link} -s --get-duration', shell=True))[2:-3])
     
     if rawdata is not None:
+        caption = "#"+extract_channel_name(rawdata.data)
+        print(caption)
         bot.send_audio(str(CHANNEL), 
                     audio=open(audio_file_path, 'rb'), 
-                    thumb=thumb, 
+                    caption=caption,
+                    duration=duration,
                     timeout=60)
     else:
         return open(audio_file_path, 'rb')
@@ -46,9 +52,23 @@ def send(message):
     text = matches.group(0).strip()
     bot.send_audio(message.chat.id, send_release(message=text))
 
+@bot.message_handler(commands=['start', 'help'])
+def start_message(message):
+    bot.send_message(message.chat.id, """How to use bot:
+
+Send me a YouTube link. I will response you with an audio file. 
+
+That is the only thing I can do. All the messages will be echoed since I am not well developed yet. Autoposting to channels feature will be introduced soon.""")
+
 @bot.message_handler(func=lambda message: True)
 def echo(message):
     bot.reply_to(message, message.text)
 
 if __name__=='__main__':
     bot.polling(none_stop=True)
+
+# TODO Поддержка UTF8 в :41
+# TODO Логи
+# TODO Очередь в базе данных
+# TODO Приветствие на /start и объяснение на /help
+# TODO Если уже залит, то file_id
