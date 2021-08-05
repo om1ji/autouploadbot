@@ -16,7 +16,7 @@ cur = con.cursor()
 
 def extract_link(raw):
     raw = raw.decode('utf-8')
-    matches = re.search(r'(?<=href\=")(.+?)(?=")', raw)
+    matches = re.search(r'(?<="alternate" href\=")(.+?)(?=")', raw)
     link = matches.group(0).strip()
     return link
 
