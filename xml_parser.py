@@ -8,7 +8,7 @@ NS = {
 }
 
 def parse_artist_title(title: str) -> tuple[str, str]:
-    title = title.split("–")
+    title = title.split("—")
     
     artist = title[0].strip()
     track_name = title[1].strip()
