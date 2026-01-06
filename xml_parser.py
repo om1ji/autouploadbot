@@ -24,11 +24,9 @@ def parse_xml(xml: str) -> dict:
 
     title = entry.find("atom:title", NS).text
     video_link = entry.find("atom:link", NS).attrib["href"]
-    description = entry.find("media:group", NS).find("media:description", NS).text
     
     artist, track_name = parse_artist_title(title)
 
     return {"video_link": video_link, 
-            "description": description,
             "artist": artist,
             "track_name": track_name}
