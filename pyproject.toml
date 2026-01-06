@@ -8,6 +8,7 @@ dependencies = [
     "aiogram>=3.24.0",
     "fastapi>=0.128.0",
     "httpx>=0.28.1",
+    "locust>=2.43.0",
     "python-dotenv>=1.2.1",
     "uvicorn>=0.40.0",
     "yt-dlp>=2025.12.8",
