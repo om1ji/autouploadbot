@@ -2,7 +2,6 @@ import yt_dlp
 from telegram import send_track
 from pathlib import Path
 import asyncio
-from pprint import pprint
 import os
 
 YT_DLP_DOWNLOAD_OPTIONS =  {
@@ -24,17 +23,24 @@ YT_DLP_DOWNLOAD_OPTIONS =  {
     ],
 }
 
+TARGET_CHAT_ID = os.getenv("TARGET_CHAT_ID")
 
-def handle_video(data: dict) -> None:
+def handle_video(data: dict, loop: asyncio.AbstractEventLoop) -> None:
     with yt_dlp.YoutubeDL(YT_DLP_DOWNLOAD_OPTIONS) as ydl:
         info = ydl.extract_info(data["video_link"], download=True)
 
     filename = Path(ydl.prepare_filename(info)).with_suffix(".mp3")
     thumb_path = Path(ydl.prepare_filename(info)).with_suffix(".jpg")
 
-    asyncio.run(
-        send_track(audio_path=filename, metadata=data, thumbnail_path=thumb_path)
-    )
+    asyncio.run_coroutine_threadsafe(
+        send_track(
+            chat_id=TARGET_CHAT_ID,
+            audio_path=filename,
+            metadata=data,
+            thumbnail_path=thumb_path,
+        ),
+        loop,
+    ).result()
     
     os.remove(filename)
     os.remove(thumb_path)

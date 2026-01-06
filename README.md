@@ -2,6 +2,16 @@
 
 Telegram bot for automatically uploading audio from YouTube channels.
 Target chat is configured via `.env` values.
+
+## Run bot
+
+Run via command:
+
+```bash
+python3 server.py
+```
+
+
 ## Manually subscribe to channel updates
 
 Go to this link to manually subscribe and test your bot:
