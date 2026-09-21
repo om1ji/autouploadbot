@@ -156,7 +156,7 @@
       "id": "telegram",
       "type": "external",
       "label": "Telegram",
-      "sublabel": "Target channel",
+      "sublabel": "Mirror chats",
       "brand": "telegram",
       "pos": [
         1190,
@@ -275,7 +275,7 @@
       "id": "worker-dedup",
       "from": "worker",
       "to": "dedup",
-      "label": "claim",
+      "label": "claim per chat",
       "fromSide": "bottom",
       "toSide": "top",
       "labelAt": [
@@ -291,7 +291,7 @@
       "items": [
         "Push: hub POSTs a signed Atom entry within seconds",
         "Poll: RSS every 15 min, works without the hub",
-        "Both feed one queue; DynamoDB drops duplicates"
+        "Both feed one queue; each chat gets a video once"
       ]
     },
     {

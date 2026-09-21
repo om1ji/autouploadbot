@@ -145,7 +145,7 @@ def check_youtube(channel_map, names) -> list[str]:
             fail(
                 f"YouTube channel {channel} ({names[channel]}): feed returned {error.code} — wrong ID?"
             )
-        # YouTube иногда отдаёт имя с пробелом на конце («Lasha Mikaia »)
+        # YouTube иногда отдаёт имя канала с пробелом на конце
         actual = (author.text or "").strip() if author is not None else "?"
         mark = "ok  " if names[channel] in (channel, actual) else "warn"
         if mark == "warn":
