@@ -12,9 +12,13 @@ s3_prefix = "autouploadbot"
 region = "us-west-1"
 confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
-# The channel map (ChannelMap) comes from channels.yaml — deploy with
-# python3 tools/deploy.py, which merges it with these overrides.
-parameter_overrides = ""
+# AdminChatId: ID of the admin group — alerts go there and its members manage
+#   the bot. Add the bot to the group, send a message, then read chat.id from
+#   https://api.telegram.org/bot<token>/getUpdates (a negative number).
+# AdminUtcOffset: hours from UTC for times the admin bot shows.
+# Channels are not a parameter: they live in ChannelsTable and are managed from
+# the admin chat or with tools/channels.py.
+parameter_overrides = "AdminUtcOffset=\"0\" AdminChatId=\"-1234567890\""
 
 [default.global.parameters]
 region = "us-west-1"

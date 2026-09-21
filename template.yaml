@@ -3,19 +3,26 @@ Transform: AWS::Serverless-2016-10-31
 Description: YouTube audio uploader - событийная схема на Lambda
 
 Parameters:
-  ChannelMap:
+  AdminChatId:
     Type: String
-    # «UC…:чат|чат,UC…:чат» без кавычек (их SAM искажает); собирается из
-    # channels.yaml командой tools/deploy.py
-    AllowedPattern: '^UC[\w-]{22}:[-@\w|]+(,UC[\w-]{22}:[-@\w|]+)*$'
-    ConstraintDescription: карта каналов — деплойте через tools/deploy.py, он собирает её из channels.yaml
-    Description: Какие каналы YouTube смотреть и в какие чаты Telegram отправлять треки каждого
+    AllowedPattern: '^-?[0-9]+$'
+    ConstraintDescription: числовой ID чата Telegram
+    Description: Служебный чат — сюда приходят алярмы; обычно ваш личный ID в Telegram
+  AdminUtcOffset:
+    Type: String
+    Default: '0'
+    AllowedPattern: '^[-+]?[0-9]{1,2}(\.5)?$'
+    Description: Часовой пояс служебного чата — смещение от UTC в часах, для времени в статусе
   BotTokenParam:
     Type: String
     Default: /autouploadbot/bot-token
   HubSecretParam:
     Type: String
     Default: /autouploadbot/hub-secret
+  TelegramSecretParam:
+    Type: String
+    Default: /autouploadbot/telegram-secret
+    Description: Секрет вебхука бота-пульта; создаёт tools/telegram_webhook.py
   LeaseSeconds:
     Type: String
     Default: '432000'
@@ -82,6 +89,35 @@ Resources:
         - AttributeName: item_id
           KeyType: HASH
 
+  # Какие каналы YouTube смотреть и в какие чаты Telegram слать каждый.
+  # Правится на лету из служебного чата; функции читают её при запуске
+  ChannelsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: youtube_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: youtube_id
+          KeyType: HASH
+
+  # Состояние бота-пульта между сообщениями: шаг диалога добавления канала,
+  # чаты, куда бота добавили. Диалоги истекают сами по TTL
+  BotStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: key
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+
   # ---------- cookies YouTube ----------
 
   CookiesBucket:
@@ -129,7 +165,7 @@ Resources:
         Size: 4096
       Environment:
         Variables:
-          CHANNEL_MAP: !Ref ChannelMap
+          CHANNELS_TABLE: !Ref ChannelsTable
           BOT_TOKEN_PARAM: !Ref BotTokenParam
           DEDUP_TABLE: !Ref DedupTable
           COOKIES_BUCKET: !Ref CookiesBucket
@@ -144,7 +180,19 @@ Resources:
             # и заодно отняло бы параллелизм у вебхука
             ScalingConfig:
               MaximumConcurrency: !Ref WorkerConcurrency
+        # проба cookies: метаданные свежего ролика без скачивания
+        CookieProbe:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(1 hour)
+            Input: '{"probe": true}'
+            # проба сама не падает, а повтор упавшей был бы лишним шумом
+            RetryPolicy:
+              MaximumRetryAttempts: 0
       Policies:
+        - CloudWatchPutMetricPolicy: {}
+        - DynamoDBReadPolicy:
+            TableName: !Ref ChannelsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref DedupTable
         - S3ReadPolicy:
@@ -167,7 +215,7 @@ Resources:
       Timeout: 60
       Environment:
         Variables:
-          CHANNEL_MAP: !Ref ChannelMap
+          CHANNELS_TABLE: !Ref ChannelsTable
           QUEUE_URL: !Ref VideoQueue
           SEEN_TABLE: !Ref SeenTable
       Events:
@@ -180,6 +228,8 @@ Resources:
             QueueName: !GetAtt VideoQueue.QueueName
         - DynamoDBCrudPolicy:
             TableName: !Ref SeenTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref ChannelsTable
 
   # ---------- продление подписки ----------
 
@@ -196,7 +246,7 @@ Resources:
         Variables:
           # URL известен прямо в шаблоне — двухфазный деплой не нужен
           CALLBACK_URL: !GetAtt WebhookFunctionUrl.FunctionUrl
-          CHANNEL_MAP: !Ref ChannelMap
+          CHANNELS_TABLE: !Ref ChannelsTable
           LEASE_SECONDS: !Ref LeaseSeconds
           HUB_SECRET_PARAM: !Ref HubSecretParam
       Events:
@@ -214,6 +264,145 @@ Resources:
             Input: '{"force": true}'
       Policies:
         - !Ref SsmReadPolicy
+        - DynamoDBReadPolicy:
+            TableName: !Ref ChannelsTable
+
+  # ---------- бот-пульт ----------
+
+  # Служебный чат с инлайн-кнопками: статус, каналы, зеркала, заливка.
+  # Telegram шлёт сюда апдейты; подлинность — по секретному заголовку
+  AdminBotFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/ingest/
+      Handler: admin.app.handler
+      Runtime: python3.12
+      Timeout: 30
+      FunctionUrlConfig:
+        AuthType: NONE
+      Environment:
+        Variables:
+          ADMIN_CHAT_ID: !Ref AdminChatId
+          ADMIN_UTC_OFFSET: !Ref AdminUtcOffset
+          BOT_TOKEN_PARAM: !Ref BotTokenParam
+          HUB_SECRET_PARAM: !Ref HubSecretParam
+          TELEGRAM_SECRET_PARAM: !Ref TelegramSecretParam
+          CHANNELS_TABLE: !Ref ChannelsTable
+          STATE_TABLE: !Ref BotStateTable
+          DEDUP_TABLE: !Ref DedupTable
+          SEEN_TABLE: !Ref SeenTable
+          QUEUE_URL: !Ref VideoQueue
+          DLQ_URL: !Ref VideoDLQ
+          HUB_CALLBACK_URL: !GetAtt WebhookFunctionUrl.FunctionUrl
+          RESUBSCRIBE_FUNCTION: !Ref ResubscribeFunction
+          STACK_NAME: !Ref AWS::StackName
+      Policies:
+        - !Ref SsmReadPolicy
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ChannelsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BotStateTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SeenTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref DedupTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt VideoQueue.QueueName
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ResubscribeFunction
+        - Statement:
+            - Effect: Allow
+              Action: sqs:GetQueueAttributes
+              Resource:
+                - !GetAtt VideoQueue.Arn
+                - !GetAtt VideoDLQ.Arn
+            - Effect: Allow
+              Action:
+                - cloudwatch:DescribeAlarms
+                - cloudwatch:GetMetricStatistics
+              Resource: '*'
+
+  # ---------- алярмы ----------
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+
+  # пересылает срабатывания и возвраты в норму в служебный чат
+  AlertFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/alerts/
+      Handler: app.handler
+      Runtime: python3.12
+      Environment:
+        Variables:
+          ADMIN_CHAT_ID: !Ref AdminChatId
+          BOT_TOKEN_PARAM: !Ref BotTokenParam
+      Events:
+        Alarm:
+          Type: SNS
+          Properties:
+            Topic: !Ref AlertTopic
+      Policies:
+        - !Ref SsmReadPolicy
+
+  # Первая строка описания — заголовок сообщения, остальное — что делать
+  DeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: |-
+        В DLQ есть треки, которые не удалось отправить
+        Воркер трижды не справился с роликом. Причина — в логах WorkerFunction: чаще всего протухли cookies или файл больше 50 МБ. После исправления верните треки из DLQ — команда в README, раздел про cookies.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt VideoDLQ.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  QueueStuckAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: |-
+        Очередь не разбирается больше часа
+        Сообщение ждёт в VideoQueue дольше часа: воркер не запускается или падает до обработки. Смотрите логи WorkerFunction.
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt VideoQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3600
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  CookieProbeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: |-
+        Проба cookies не прошла
+        YouTube не отдаёт ролик с IP AWS — скорее всего, протухли cookies. Выгрузите новые из окна инкогнито и наберите tools/upload_cookies.sh. Пока cookies не обновлены, новые треки будут копиться в DLQ.
+      Namespace: autouploadbot
+      MetricName: CookieProbe
+      Statistic: Minimum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
 
   # ---------- общая политика чтения секретов ----------
 
@@ -228,6 +417,7 @@ Resources:
             Resource:
               - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BotTokenParam}
               - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${HubSecretParam}
+              - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TelegramSecretParam}
           - Effect: Allow
             Action: kms:Decrypt
             Resource: '*'
@@ -246,6 +436,12 @@ Outputs:
     Value: !Ref VideoDLQ
   ResubscribeFunctionName:
     Value: !Ref ResubscribeFunction
+  AdminBotUrl:
+    Description: Вебхук бота-пульта; tools/telegram_webhook.py регистрирует его в Telegram
+    Value: !GetAtt AdminBotFunctionUrl.FunctionUrl
+  ChannelsTableName:
+    Description: Карта каналов; tools/channels.py импортирует и экспортирует её
+    Value: !Ref ChannelsTable
   CookiesBucketName:
     Description: Сюда кладётся cookies.txt для yt-dlp
     Value: !Ref CookiesBucket

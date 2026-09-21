@@ -26,8 +26,13 @@ FEED_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={}"
 
 CALLBACK_URL = os.environ["CALLBACK_URL"]
 # URL фида собираем сами: вариант с /xml/feeds/ выглядит похоже, но это заглушка
-# карта «UC…:чаты,UC…:чаты» из channels.yaml; подписке нужны только каналы
-CHANNEL_IDS = [pair.partition(":")[0] for pair in os.environ["CHANNEL_MAP"].split(",") if pair]
+CHANNELS_TABLE = os.environ["CHANNELS_TABLE"]
+
+
+def channel_ids() -> list[str]:
+    """Каналы из ChannelsTable — на каждом запуске, чтобы новые подхватывались без деплоя."""
+    table = boto3.resource("dynamodb").Table(CHANNELS_TABLE)
+    return [item["youtube_id"] for item in table.scan(ProjectionExpression="youtube_id")["Items"]]
 LEASE_SECONDS = os.environ.get("LEASE_SECONDS", "432000")
 HUB_SECRET_PARAM = os.environ["HUB_SECRET_PARAM"]
 
@@ -152,8 +157,11 @@ def handler(event, context):
     # Параллельно: хаб держит каждую заявку ~20 с перед 503, и по очереди
     # четыре канала уже не укладываются в таймаут. Каналы при этом
     # независимы — сбой одного не мешает остальным
-    with ThreadPoolExecutor(max_workers=len(CHANNEL_IDS)) as pool:
-        outcomes = dict(zip(CHANNEL_IDS, pool.map(lambda c: process_channel(c, force), CHANNEL_IDS)))
+    ids = channel_ids()
+    if not ids:
+        return {}
+    with ThreadPoolExecutor(max_workers=len(ids)) as pool:
+        outcomes = dict(zip(ids, pool.map(lambda c: process_channel(c, force), ids)))
 
     results = {channel: result for channel, (result, _) in outcomes.items()}
     rejected = [channel for channel, (_, failed) in outcomes.items() if failed]

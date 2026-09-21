@@ -2,30 +2,42 @@ import asyncio
 import json
 import logging
 import os
+import time
 
 import boto3
 
-from app import dedup
+from app import dedup, probe
 from app.downloader import download
 from app.telegram import send_track
 
 logging.getLogger().setLevel(logging.INFO)
 
-def parse_channel_map(raw: str) -> dict[str, list]:
-    """«UCaaa:-100x|-100y,UCbbb:@name» → {"UCaaa": [-100x, -100y], "UCbbb": ["@name"]}.
+CHANNELS = boto3.resource("dynamodb").Table(os.environ["CHANNELS_TABLE"])
+CACHE_SECONDS = 60
 
-    Формат без кавычек: SAM искажает кавычки в значениях параметров, а в ID
-    каналов и чатов разделителей `,` `:` `|` не бывает.
+_channels: dict[str, list] = {}
+_channels_at = float("-inf")
+
+
+def chat_id(value) -> int | str:
+    text = str(value)
+    return int(text) if text.lstrip("-").isdigit() else text
+
+
+def channels() -> dict[str, list]:
+    """{канал YouTube: [чаты]} из ChannelsTable.
+
+    Кэш на минуту: правка из служебного чата доходит быстро, а таблица не
+    читается на каждый трек.
     """
-    channel_map = {}
-    for pair in filter(None, raw.split(",")):
-        channel, _, chats = pair.partition(":")
-        channel_map[channel] = [int(c) if c.lstrip("-").isdigit() else c for c in chats.split("|")]
-    return channel_map
+    global _channels, _channels_at
+    if time.monotonic() - _channels_at > CACHE_SECONDS:
+        items = CHANNELS.scan(ProjectionExpression="youtube_id, chats")["Items"]
+        _channels = {item["youtube_id"]: [chat_id(c) for c in item.get("chats", [])] for item in items}
+        _channels_at = time.monotonic()
+    return _channels
 
 
-# {канал YouTube: [чаты Telegram]} из channels.yaml
-CHANNEL_MAP = parse_channel_map(os.environ["CHANNEL_MAP"])
 BOT_TOKEN_PARAM = os.environ["BOT_TOKEN_PARAM"]
 
 _bot_token: str | None = None
@@ -42,6 +54,9 @@ def bot_token() -> str:
 
 
 def handler(event, context):
+    # по расписанию приходит {"probe": true}, из SQS — Records
+    if event.get("probe"):
+        return probe.run(list(channels()))
     for record in event["Records"]:
         process(json.loads(record["body"]))
 
@@ -55,7 +70,7 @@ def process(data: dict) -> None:
     video_id = data["video_id"]
     channel_id = data.get("channel_id")
 
-    chats = CHANNEL_MAP.get(channel_id)
+    chats = channels().get(channel_id)
     if not chats:
         # без маршрута повтор ничего не изменит — не гоняем сообщение по ретраям
         logging.warning(
