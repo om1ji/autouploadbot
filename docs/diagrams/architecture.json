@@ -1,0 +1,315 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "autouploadbot on AWS",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1380,
+      720
+    ]
+  },
+  "components": [
+    {
+      "id": "youtube",
+      "type": "external",
+      "label": "YouTube",
+      "sublabel": "Channel feeds",
+      "brand": "youtube",
+      "pos": [
+        40,
+        320
+      ],
+      "size": [
+        150,
+        68
+      ]
+    },
+    {
+      "id": "hub",
+      "type": "external",
+      "label": "WebSub hub",
+      "sublabel": "Google PubSubHubbub",
+      "pos": [
+        270,
+        320
+      ],
+      "size": [
+        150,
+        68
+      ]
+    },
+    {
+      "id": "resubscribe",
+      "type": "backend",
+      "label": "ResubscribeFunction",
+      "sublabel": "Hourly + daily",
+      "pos": [
+        500,
+        110
+      ],
+      "size": [
+        150,
+        68
+      ]
+    },
+    {
+      "id": "webhook",
+      "type": "security",
+      "label": "WebhookFunction",
+      "sublabel": "Function URL, HMAC",
+      "pos": [
+        500,
+        320
+      ],
+      "size": [
+        150,
+        68
+      ]
+    },
+    {
+      "id": "dlq",
+      "type": "messagebus",
+      "label": "VideoDLQ",
+      "sublabel": "SQS dead letters",
+      "pos": [
+        730,
+        110
+      ],
+      "size": [
+        150,
+        68
+      ]
+    },
+    {
+      "id": "queue",
+      "type": "messagebus",
+      "label": "VideoQueue",
+      "sublabel": "SQS",
+      "pos": [
+        730,
+        320
+      ],
+      "size": [
+        150,
+        68
+      ]
+    },
+    {
+      "id": "poll",
+      "type": "backend",
+      "label": "PollFunction",
+      "sublabel": "Every 15 min",
+      "pos": [
+        730,
+        530
+      ],
+      "size": [
+        150,
+        68
+      ]
+    },
+    {
+      "id": "cookies",
+      "type": "database",
+      "label": "CookiesBucket",
+      "sublabel": "S3 cookies.txt",
+      "pos": [
+        960,
+        110
+      ],
+      "size": [
+        150,
+        68
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "WorkerFunction",
+      "sublabel": "yt-dlp, deno, ffmpeg",
+      "pos": [
+        960,
+        320
+      ],
+      "size": [
+        150,
+        68
+      ]
+    },
+    {
+      "id": "dedup",
+      "type": "database",
+      "label": "DynamoDB",
+      "sublabel": "Dedup + seen tables",
+      "pos": [
+        960,
+        530
+      ],
+      "size": [
+        150,
+        68
+      ]
+    },
+    {
+      "id": "telegram",
+      "type": "external",
+      "label": "Telegram",
+      "sublabel": "Target channel",
+      "brand": "telegram",
+      "pos": [
+        1190,
+        320
+      ],
+      "size": [
+        150,
+        68
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "AWS SAM stack",
+      "wraps": [
+        "resubscribe",
+        "webhook",
+        "dlq",
+        "queue",
+        "poll",
+        "cookies",
+        "worker",
+        "dedup"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "yt-hub",
+      "from": "youtube",
+      "to": "hub",
+      "label": "publish"
+    },
+    {
+      "id": "hub-webhook",
+      "from": "hub",
+      "to": "webhook",
+      "label": "signed POST",
+      "variant": "emphasis"
+    },
+    {
+      "id": "webhook-queue",
+      "from": "webhook",
+      "to": "queue",
+      "label": "enqueue",
+      "variant": "emphasis"
+    },
+    {
+      "id": "queue-worker",
+      "from": "queue",
+      "to": "worker",
+      "label": "trigger",
+      "variant": "emphasis"
+    },
+    {
+      "id": "worker-telegram",
+      "from": "worker",
+      "to": "telegram",
+      "label": "sendAudio",
+      "variant": "emphasis"
+    },
+    {
+      "id": "resub-hub",
+      "from": "resubscribe",
+      "to": "hub",
+      "label": "subscribe",
+      "fromSide": "left",
+      "toSide": "top"
+    },
+    {
+      "id": "yt-poll",
+      "from": "youtube",
+      "to": "poll",
+      "label": "RSS",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "id": "poll-queue",
+      "from": "poll",
+      "to": "queue",
+      "label": "new videos",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "poll-dedup",
+      "from": "poll",
+      "to": "dedup",
+      "label": "seen"
+    },
+    {
+      "id": "queue-dlq",
+      "from": "queue",
+      "to": "dlq",
+      "label": "3 failures",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "cookies-worker",
+      "from": "cookies",
+      "to": "worker",
+      "label": "cookies",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        1035,
+        249
+      ]
+    },
+    {
+      "id": "worker-dedup",
+      "from": "worker",
+      "to": "dedup",
+      "label": "claim",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        1035,
+        459
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Two ingest paths",
+      "items": [
+        "Push: hub POSTs a signed Atom entry within seconds",
+        "Poll: RSS every 15 min, works without the hub",
+        "Both feed one queue; DynamoDB drops duplicates"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Worker",
+      "items": [
+        "Downloads audio from YouTube with yt-dlp",
+        "deno + yt-dlp-ejs solve player signatures",
+        "Cookies from S3 pass the datacenter bot check"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Secrets",
+      "items": [
+        "Bot token and hub secret live in SSM",
+        "Webhook rejects unsigned requests with 403"
+      ]
+    }
+  ]
+}

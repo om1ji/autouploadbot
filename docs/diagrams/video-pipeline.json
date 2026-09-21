@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "One video, end to end",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [
+      1080,
+      608
+    ]
+  },
+  "participants": [
+    {
+      "id": "hub",
+      "type": "external",
+      "label": "Source",
+      "sublabel": "hub or poll"
+    },
+    {
+      "id": "webhook",
+      "type": "security",
+      "label": "Webhook",
+      "sublabel": "WebhookFunction"
+    },
+    {
+      "id": "queue",
+      "type": "messagebus",
+      "label": "Queue",
+      "sublabel": "VideoQueue, SQS"
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "Worker",
+      "sublabel": "WorkerFunction"
+    },
+    {
+      "id": "dedup",
+      "type": "database",
+      "label": "Dedup",
+      "sublabel": "DedupTable"
+    },
+    {
+      "id": "cookies",
+      "type": "database",
+      "label": "Cookies",
+      "sublabel": "CookiesBucket, S3"
+    },
+    {
+      "id": "youtube",
+      "type": "external",
+      "label": "YouTube",
+      "sublabel": "yt-dlp target",
+      "brand": "youtube"
+    },
+    {
+      "id": "telegram",
+      "type": "external",
+      "label": "Telegram",
+      "sublabel": "Bot API",
+      "brand": "telegram"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 250,
+      "label": "Accept"
+    },
+    {
+      "from": 266,
+      "to": 414,
+      "label": "Download"
+    },
+    {
+      "from": 430,
+      "to": 512,
+      "label": "Deliver or retry"
+    }
+  ],
+  "messages": [
+    {
+      "from": "hub",
+      "to": "webhook",
+      "y": 176,
+      "label": "POST Atom + X-Hub-Signature",
+      "variant": "emphasis"
+    },
+    {
+      "from": "webhook",
+      "to": "queue",
+      "y": 206,
+      "label": "SendMessage",
+      "variant": "emphasis",
+      "note": "only after HMAC check"
+    },
+    {
+      "from": "webhook",
+      "to": "hub",
+      "y": 236,
+      "label": "202 Accepted",
+      "variant": "return"
+    },
+    {
+      "from": "queue",
+      "to": "worker",
+      "y": 280,
+      "label": "invoke, batch of 1",
+      "variant": "emphasis"
+    },
+    {
+      "from": "worker",
+      "to": "dedup",
+      "y": 310,
+      "label": "claim videoId (conditional put)",
+      "variant": "default"
+    },
+    {
+      "from": "worker",
+      "to": "cookies",
+      "y": 340,
+      "label": "get cookies.txt",
+      "variant": "default",
+      "note": "once per cold start"
+    },
+    {
+      "from": "worker",
+      "to": "youtube",
+      "y": 370,
+      "label": "yt-dlp download",
+      "variant": "emphasis"
+    },
+    {
+      "from": "youtube",
+      "to": "worker",
+      "y": 400,
+      "label": "audio stream",
+      "variant": "return"
+    },
+    {
+      "from": "worker",
+      "to": "telegram",
+      "y": 444,
+      "label": "sendAudio mp3 + cover",
+      "variant": "emphasis"
+    },
+    {
+      "from": "worker",
+      "to": "dedup",
+      "y": 474,
+      "label": "on error: release claim",
+      "variant": "dashed"
+    },
+    {
+      "from": "worker",
+      "to": "queue",
+      "y": 504,
+      "label": "raise: retry, 3 times then DLQ",
+      "variant": "dashed"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "webhook",
+      "from": 170,
+      "to": 244,
+      "type": "security"
+    },
+    {
+      "participant": "queue",
+      "from": 200,
+      "to": 288,
+      "type": "messagebus"
+    },
+    {
+      "participant": "worker",
+      "from": 274,
+      "to": 512,
+      "type": "backend"
+    },
+    {
+      "participant": "dedup",
+      "from": 304,
+      "to": 318,
+      "type": "database"
+    },
+    {
+      "participant": "youtube",
+      "from": 364,
+      "to": 408,
+      "type": "external"
+    },
+    {
+      "participant": "telegram",
+      "from": 438,
+      "to": 452,
+      "type": "external"
+    }
+  ]
+}
