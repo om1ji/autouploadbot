@@ -1,0 +1,20 @@
+# Copy to samconfig.toml and fill in your values:
+#   cp samconfig.toml.example samconfig.toml
+# samconfig.toml is git-ignored: it ends up holding account-specific data
+# (ECR repository URIs with your AWS account ID).
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "autouploadbot"
+resolve_s3 = true
+resolve_image_repos = true
+s3_prefix = "autouploadbot"
+region = "us-west-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+# TargetChatId: channels and supergroups start with -100
+# ChannelIds:   comma-separated YouTube channel IDs, no spaces
+parameter_overrides = "TargetChatId=\"-1001234567890\" ChannelIds=\"UCxxxxxxxxxxxxxxxxxxxxxx,UCyyyyyyyyyyyyyyyyyyyyyy\""
+
+[default.global.parameters]
+region = "us-west-1"
