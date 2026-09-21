@@ -1,18 +1,21 @@
-# Which YouTube channels to watch and which Telegram chats mirror each one.
+# Bulk import of YouTube channels and the Telegram chats that mirror them.
+# Day to day, channels are managed from the admin chat; this file is for the
+# first import, backups and bulk changes.
 #
 #   cp channels.yaml.example channels.yaml
-#   python3 tools/deploy.py
+#   python3 tools/channels.py import
 #
-# channels.yaml is git-ignored: chat IDs are private. Every change needs a
-# deploy — tools/deploy.py validates the file, checks that the bot can post to
-# every chat, and deploys.
+# channels.yaml is git-ignored: chat IDs are private. Import checks that every
+# YouTube ID has a feed and that the bot can post to every chat, then adds or
+# updates the entries in ChannelsTable — no deploy needed. It never removes a
+# channel; do that from the admin chat.
 #
 # youtube   channel ID, "UC" + 22 characters. For a youtube.com/@handle link:
 #             curl -s https://www.youtube.com/@handle | grep -o '"externalId":"UC[^"]*"'
 # telegram  one chat or a list. Channels and supergroups start with -100;
 #           a public channel may also be given as "@username". The bot must be
 #           an admin allowed to post messages in each chat.
-# name      optional, for your own reference; deploy warns if it does not match
+# name      optional, for your own reference; import warns if it does not match
 #           the channel's name on YouTube.
 
 - name: First channel

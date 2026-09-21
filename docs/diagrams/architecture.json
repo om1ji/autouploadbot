@@ -7,7 +7,7 @@
     "quality_profile": "showcase",
     "viewBox": [
       1380,
-      720
+      850
     ]
   },
   "components": [
@@ -142,7 +142,7 @@
       "id": "dedup",
       "type": "database",
       "label": "DynamoDB",
-      "sublabel": "Dedup + seen tables",
+      "sublabel": "Channels, dedup, seen",
       "pos": [
         960,
         530
@@ -166,6 +166,49 @@
         150,
         68
       ]
+    },
+    {
+      "id": "adminchat",
+      "type": "external",
+      "label": "Admin chat",
+      "sublabel": "Telegram group",
+      "brand": "telegram",
+      "pos": [
+        1190,
+        530
+      ],
+      "size": [
+        150,
+        68
+      ]
+    },
+    {
+      "id": "adminbot",
+      "type": "backend",
+      "label": "AdminBotFunction",
+      "sublabel": "Inline buttons",
+      "pos": [
+        960,
+        720
+      ],
+      "size": [
+        150,
+        68
+      ]
+    },
+    {
+      "id": "alerts",
+      "type": "backend",
+      "label": "AlertFunction",
+      "sublabel": "CloudWatch alarms",
+      "pos": [
+        1190,
+        720
+      ],
+      "size": [
+        150,
+        68
+      ]
     }
   ],
   "boundaries": [
@@ -180,7 +223,9 @@
         "poll",
         "cookies",
         "worker",
-        "dedup"
+        "dedup",
+        "adminbot",
+        "alerts"
       ]
     }
   ],
@@ -282,6 +327,31 @@
         1035,
         459
       ]
+    },
+    {
+      "id": "adminchat-adminbot",
+      "from": "adminchat",
+      "to": "adminbot",
+      "label": "commands",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "adminbot-dedup",
+      "from": "adminbot",
+      "to": "dedup",
+      "label": "edit channels",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "alerts-adminchat",
+      "from": "alerts",
+      "to": "adminchat",
+      "label": "alarm / OK",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
     }
   ],
   "cards": [
@@ -305,10 +375,11 @@
     },
     {
       "dot": "violet",
-      "title": "Secrets",
+      "title": "Operations",
       "items": [
-        "Bot token and hub secret live in SSM",
-        "Webhook rejects unsigned requests with 403"
+        "Channels live in DynamoDB, edited from the admin chat",
+        "Alarms: dead letters, a stuck queue, dead cookies",
+        "Secrets in SSM; both public URLs check a secret"
       ]
     }
   ]

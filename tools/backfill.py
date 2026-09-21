@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Post the latest videos of each channel to its Telegram chats.
 
-    python3 tools/backfill.py --latest 3                 # every channel in channels.yaml
+    python3 tools/backfill.py --latest 3                 # every channel in ChannelsTable
     python3 tools/backfill.py --latest 3 --channel UC…   # one channel
     python3 tools/backfill.py --latest 3 --dry-run       # show the plan only
 
@@ -16,7 +16,6 @@ posted there again — so running this twice is harmless.
 """
 
 import argparse
-import importlib.util
 import json
 import re
 import subprocess
@@ -36,9 +35,8 @@ NS = {
 sys.path.insert(0, str(ROOT / "functions" / "ingest"))
 from xml_parser import parse_artist_title
 
-_spec = importlib.util.spec_from_file_location("deploy", ROOT / "tools" / "deploy.py")
-deploy = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(deploy)
+sys.path.insert(0, str(ROOT / "tools"))
+import stack  # noqa: E402
 
 
 def aws(*args: str) -> str:
@@ -136,10 +134,12 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    channel_map, names = deploy.load_channels()
+    table_channels = stack.channels_from_table()
+    channel_map = {c: e["chats"] for c, e in table_channels.items()}
+    names = {c: e["name"] for c, e in table_channels.items()}
     if args.channel:
         if args.channel not in channel_map:
-            sys.exit(f"{args.channel} is not in channels.yaml")
+            sys.exit(f"{args.channel} is not in ChannelsTable")
         channel_map = {args.channel: channel_map[args.channel]}
 
     stack = stack_name()
@@ -167,22 +167,6 @@ def main() -> None:
         "text",
     )
 
-    deployed = aws(
-        "cloudformation",
-        "describe-stacks",
-        "--stack-name",
-        stack,
-        "--query",
-        "Stacks[0].Parameters[?ParameterKey=='ChannelMap'].ParameterValue|[0]",
-        "--output",
-        "text",
-    )
-    missing = [c for c in channel_map if c not in deployed]
-    if missing:
-        message = f"Not deployed yet: {', '.join(names[c] for c in missing)}. Run python3 tools/deploy.py first."
-        if not args.dry_run:
-            sys.exit(message)
-        print(f"warning: {message}\n")
 
     waves: list[list[dict]] = [[] for _ in range(args.latest)]
     for channel, chats in channel_map.items():

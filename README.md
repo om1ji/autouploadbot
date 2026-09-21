@@ -9,7 +9,7 @@ line items are ECR image storage and a few DynamoDB reads.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.png">
-  <img alt="Architecture: YouTube and the WebSub hub feed a webhook and a poller, both enqueue into SQS, a worker Lambda downloads audio and sends it to Telegram" src="docs/images/architecture-light.png">
+  <img alt="Architecture: YouTube and the WebSub hub feed a webhook and a poller, both enqueue into SQS, a worker Lambda downloads audio and sends it to Telegram; an admin bot edits the channel table from a Telegram group, where CloudWatch alarms also post" src="docs/images/architecture-light.png">
 </picture>
 
 ## How it works
@@ -23,9 +23,11 @@ same SQS queue:
 | **Poll** | `PollFunction` reads each channel's RSS feed every 15 minutes | up to 15 min | nothing but YouTube |
 
 Both paths produce identical messages carrying the video's YouTube channel.
-`channels.yaml` maps every YouTube channel to one or more Telegram chats, so a
-channel can have its own mirror, several channels can share a chat, and one
-channel can be posted to several chats.
+`ChannelsTable` in DynamoDB maps every YouTube channel to one or more Telegram
+chats, so a channel can have its own mirror, several channels can share a chat,
+and one channel can be posted to several chats. The table is edited from the
+[admin chat](#admin-chat) with inline buttons, and every function reads it at
+run time, so adding a channel or a mirror needs no deploy.
 
 For every target chat the worker claims `videoId#chat` in DynamoDB first, so
 each chat gets a video exactly once — even when it arrives through both paths,
@@ -74,6 +76,11 @@ functions/ingest/        zip, stdlib only
   app.py                   WebhookFunction: hub verification, HMAC check, enqueue
   poll.py                  PollFunction: RSS polling with backlog protection
   xml_parser.py            Atom parsing and "Artist — Track" title parsing
+  admin/                   AdminBotFunction: the admin chat bot
+    app.py                   Telegram webhook, routing, the add-channel dialog
+    screens.py               message texts and inline keyboards
+    ops.py                   channels, status, hub subscriptions, backfill
+    youtube.py               channel ID from a link or @handle
 functions/alerts/        zip, stdlib only
   app.py                   AlertFunction: CloudWatch alarm → Telegram message
 functions/resubscribe/   zip, stdlib only
@@ -87,14 +94,16 @@ worker/                  container image (yt-dlp, deno, ffmpeg)
   app/telegram.py          sendAudio via aiogram
   app/dedup.py             DynamoDB claim / release
 tools/
-  deploy.py                validate channels.yaml, check access, build and deploy
+  channels.py              list, import and export ChannelsTable as YAML
+  telegram_webhook.py      connect the admin bot to Telegram
+  stack.py                 shared helpers: stack name, outputs, resources
   send_test_event.py       sign and send a fake hub notification
   curl_to_cookies.py       turn DevTools cookies into cookies.txt
   upload_cookies.sh        clipboard → cookies.txt → S3
   backfill.py              post the latest N videos of each channel to its chats
 docs/diagrams/           archify sources (.json) and interactive diagrams (.html)
 template.yaml            the whole stack: queues, tables, bucket, functions, alarms, IAM
-channels.yaml.example    YouTube channel → Telegram chats, to copy
+channels.yaml.example    YouTube channel → Telegram chats, for tools/channels.py
 samconfig.toml.example   deploy parameters to copy
 ```
 
@@ -105,8 +114,9 @@ samconfig.toml.example   deploy parameters to copy
 - AWS CLI with credentials — preferably an IAM user, not the root account
 - [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
 - Docker, running: `sam build` builds the worker image locally
-- Python 3.11+ with PyYAML for `tools/deploy.py` (`pip install pyyaml`)
-- A Telegram bot that is an admin, allowed to post, in every target chat
+- Python 3.11+; PyYAML only for `tools/channels.py import` (`pip install pyyaml`)
+- A Telegram bot, and a Telegram group for administering it with the bot added
+  as a member
 
 ### 1. Secrets
 
@@ -126,10 +136,56 @@ with it. The webhook's Function URL is public by necessity — the hub cannot
 authenticate to AWS — and rejects anything without a valid
 `X-Hub-Signature` with `403`.
 
-### 2. Channels
+A third secret, `/autouploadbot/telegram-secret`, guards the admin bot's
+webhook the same way; `tools/telegram_webhook.py` creates it after the first
+deploy.
+
+### 2. Parameters
+
+```bash
+cp samconfig.toml.example samconfig.toml
+```
+
+| Parameter | Meaning |
+| --- | --- |
+| `AdminChatId` | ID of the admin group: alerts go there, and every member can manage the bot from it. Add the bot to the group, send any message, then read `chat.id` from `getUpdates` — a negative number. |
+| `AdminUtcOffset` | Hours from UTC for times the admin bot shows, e.g. `3` or `5.5`. Default `0`. |
+| `LeaseSeconds` | WebSub lease, default and maximum `432000` (5 days). |
+| `WorkerConcurrency` | How many tracks download in parallel, default `5`, minimum `2`. |
+| `BotTokenParam`, `HubSecretParam`, `TelegramSecretParam` | SSM parameter names, defaults as above. |
+
+### 3. Deploy
+
+```bash
+sam build && sam deploy
+```
+
+On the first deploy SAM warns that `WebhookFunction` and `AdminBotFunction`
+have no authentication — answer `y`, that is intended: both check a secret
+themselves.
+
+### 4. Connect the admin bot
+
+```bash
+python3 tools/telegram_webhook.py          # secret, webhook, /menu and /status
+python3 tools/telegram_webhook.py --info   # what Telegram has now
+```
+
+Run it once; again only if the `AdminBotUrl` output changes. From then on the
+bot receives updates through the webhook, and `getUpdates` stops working for
+it.
+
+### 5. Channels
+
+Send `/menu` in the admin group and press **➕ Добавить канал** — see
+[Admin chat](#admin-chat). To load many channels at once, describe them in a
+file instead:
 
 ```bash
 cp channels.yaml.example channels.yaml
+python3 tools/channels.py import           # validate, check, write to ChannelsTable
+python3 tools/channels.py list             # what the table holds now
+python3 tools/channels.py export           # back the table up to channels.yaml
 ```
 
 ```yaml
@@ -144,42 +200,14 @@ cp channels.yaml.example channels.yaml
     - "@public_mirror"
 ```
 
+`import` checks that every YouTube ID has a feed (and that its author matches
+`name`) and that the bot is an admin allowed to post in every chat, then
+upserts the entries; channels missing from the file are left alone.
 `channels.yaml` is git-ignored — chat IDs are private. Channels and supergroups
 have IDs starting with `-100`; without the minus Telegram answers
 `chat not found`. A public channel can be given as `"@username"`.
 
-### 3. Other parameters
-
-```bash
-cp samconfig.toml.example samconfig.toml
-```
-
-| Parameter | Meaning |
-| --- | --- |
-| `AdminChatId` | Your Telegram user ID: alerts go to your private chat with the bot. Send it `/start`, then read the ID from `getUpdates`. |
-| `LeaseSeconds` | WebSub lease, default and maximum `432000` (5 days). |
-| `WorkerConcurrency` | How many tracks download in parallel, default `5`, minimum `2`. |
-| `BotTokenParam`, `HubSecretParam` | SSM parameter names, defaults as above. |
-
-### 4. Deploy
-
-```bash
-python3 tools/deploy.py              # validate, check, build, deploy
-python3 tools/deploy.py --dry-run    # everything except the deploy
-```
-
-Always deploy through this script rather than a bare `sam deploy`: it turns
-`channels.yaml` into the `ChannelMap` stack parameter and merges it with the
-overrides from `samconfig.toml`. Before deploying it checks that every YouTube
-ID has a feed (and that its author matches `name`) and that the bot is an admin
-allowed to post in every chat — a chat ID without its minus is caught here,
-not by the first failed track. A bare `sam deploy` fails on the missing
-`ChannelMap` rather than deploying without it.
-
-On the first deploy SAM warns that `WebhookFunction` has no authentication —
-answer `y`, that is intended.
-
-### 5. First run
+### 6. First run
 
 ```bash
 STACK=autouploadbot   # your stack_name
@@ -190,39 +218,49 @@ out() { aws cloudformation describe-stacks --stack-name "$STACK" \
 aws lambda invoke --function-name "$(out ResubscribeFunctionName)" /dev/stdout
 ```
 
-The first `PollFunction` run (within 15 minutes) posts nothing: it marks the
-15 videos already in each feed as seen, otherwise the whole back catalogue
-would land in the channel. A channel added to `channels.yaml` later is
-handled the same way.
+The first `PollFunction` run for a channel (within 15 minutes) posts nothing:
+it marks the 15 videos already in the feed as seen, otherwise the whole back
+catalogue would land in the chat. A channel added later is handled the same
+way.
 
-## Adding a channel
+## Admin chat
 
-Add an entry to `channels.yaml` and run `python3 tools/deploy.py`. Callback,
-queue and deduplication are shared by all channels; the new channel's
-subscription is picked up by the next hourly `ResubscribeFunction` run. Adding
-the bot to a new chat works the same way: make it an admin allowed to post,
-then deploy — the check tells you if you forgot.
+`AdminBotFunction` turns the admin group into a control panel. Every member of
+that group can use it; updates from any other chat or from private messages
+are ignored. Telegram signs each update with the `telegram-secret`, and the
+function rejects anything else with `403`.
 
-A new channel or mirror starts empty. To seed it with the latest videos:
+| Screen | What it does |
+| --- | --- |
+| 📊 Статус | queue and DLQ depth, cookie probe result, firing alarms, tracks sent per chat in the last 24 hours |
+| 🔔 Подписки | the hub's state and expiry for every channel's WebSub subscription |
+| 📺 Каналы | every channel with its mirrors; add or remove a mirror, post the latest 3 videos, delete the channel |
+| ➕ Добавить канал | a dialog: YouTube link or `@handle` → target chat → confirm, optionally with the latest 3 videos |
+
+The target chat is chosen by forwarding any post from it, by its `@username`,
+or with a button: when someone makes the bot an admin in a channel, the bot
+remembers it, offers **➕ Привязать** right away and lists the channel on the
+chat step. Before saving, the bot checks that it can post there.
+
+A new channel is subscribed on the hub at once. Deleting a channel
+unsubscribes it and forgets its seen videos, so adding it back later does not
+flood the chat with its back catalogue.
+
+The dialog lives in one message that the bot edits step by step; its state is
+kept in `BotStateTable` for an hour, because Lambda remembers nothing between
+updates. `/menu` and `/status` work at any time; every alert has a
+**📊 Статус** button too.
+
+A new channel or mirror starts empty. **⏪ Залить последние 3** on its card
+queues the latest videos a couple of minutes apart, oldest first, and skips
+anything a chat already has. For several channels at once there is also:
 
 ```bash
 python3 tools/backfill.py --latest 3 [--channel UC…] [--dry-run]
 ```
 
 It queues the chosen videos in waves — the oldest first, the next once the
-queue has drained — so every chat gets them in YouTube order, and skips
-anything a chat already has.
-
-An ID looks like `UC` followed by 22 characters. For a `youtube.com/@handle`
-link it is in the page source:
-
-```bash
-curl -s https://www.youtube.com/@handle | grep -o '"externalId":"UC[^"]*"'
-```
-
-Check that the ID really is that channel by opening
-`https://www.youtube.com/feeds/videos.xml?channel_id=UC…` and looking at
-`<author>`: channel pages embed other channels' IDs too.
+queue has drained — so every chat gets them in YouTube order.
 
 ## Titles
 
@@ -341,7 +379,7 @@ The script signs a fake Atom notification with the same `hub-secret` and posts
 it to the webhook, so everything after the hub runs for real: signature check,
 queue, worker, YouTube, Telegram. The track is actually posted. Running it
 again for the same video does nothing — deduplication skips it. `--channel`
-defaults to the first channel in `channels.yaml`, the stack name to
+defaults to the first channel in `ChannelsTable`, the stack name to
 `stack_name` from `samconfig.toml`.
 
 ## Operations
@@ -365,8 +403,8 @@ aws ecr put-lifecycle-policy --repository-name <repo> --lifecycle-policy-text \
 
 ## Alerts
 
-Three CloudWatch alarms post to your private chat with the bot, both when
-something breaks and when it recovers:
+Three CloudWatch alarms post to the admin chat, both when something breaks
+and when it recovers:
 
 | Alarm | Fires when | Usually means |
 | --- | --- | --- |

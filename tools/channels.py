@@ -1,65 +1,56 @@
 #!/usr/bin/env python3
-"""Validate channels.yaml, check access, build and deploy the stack.
+"""The channel map: YouTube channel → Telegram chats, stored in ChannelsTable.
 
-    python3 tools/deploy.py              # validate, check, build, deploy
-    python3 tools/deploy.py --dry-run    # validate and check only
-    python3 tools/deploy.py --no-check   # skip the YouTube and Telegram checks
+    python3 tools/channels.py list                     # what the bot watches now
+    python3 tools/channels.py import [channels.yaml]   # validate, check, upsert
+    python3 tools/channels.py export [channels.yaml]   # back up the table as YAML
 
-channels.yaml is the single source of truth for which YouTube channels are
-watched and which Telegram chats mirror each one. It reaches the functions as
-the ChannelMap stack parameter — "UCaaa:-100x|-100y,UCbbb:@name", without
-quotes because SAM mangles quotes in parameter values — merged with the other
-parameter_overrides from samconfig.toml.
+Day to day the map is edited from the admin chat; these commands are for the
+first import, backups and bulk changes. Import checks every YouTube ID against
+its feed and that the bot is an admin allowed to post in every chat — the usual
+reason for `chat not found` is a chat ID without its leading minus. It adds and
+updates entries and never removes any. The functions pick changes up on their
+next run, no deploy needed.
 
-Checks before deploying:
-  * every YouTube ID has a feed; its author is compared with `name`;
-  * the bot is an admin allowed to post in every Telegram chat — the usual
-    reason for `chat not found` is a chat ID without its leading minus.
-
-Needs PyYAML:  pip install pyyaml   (or: uv run --with pyyaml tools/deploy.py)
+Import needs PyYAML:  pip install pyyaml   (or: uv run --with pyyaml tools/channels.py)
 """
-
 import json
 import re
-import shlex
 import subprocess
 import sys
-import tomllib
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-CHANNELS = ROOT / "channels.yaml"
-SAMCONFIG = ROOT / "samconfig.toml"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import stack  # noqa: E402
 
 CHANNEL_ID = re.compile(r"^UC[\w-]{22}$")
 FEED = "https://www.youtube.com/feeds/videos.xml?channel_id={}"
-# parameters that ChannelMap replaced; dropped from samconfig overrides
-OBSOLETE = {"TargetChatId", "ChannelIds"}
 
 
 def fail(message: str) -> None:
     sys.exit(f"ERROR: {message}")
 
 
-def load_channels() -> tuple[dict[str, list], dict[str, str]]:
+def load_yaml(path: Path) -> tuple[dict[str, list], dict[str, str]]:
     try:
         import yaml
     except ImportError:
         fail(
-            "PyYAML is required: pip install pyyaml  (or: uv run --with pyyaml tools/deploy.py)"
+            "PyYAML is required: pip install pyyaml  (or: uv run --with pyyaml tools/channels.py)"
         )
-    if not CHANNELS.exists():
+    if not path.exists():
         fail(
-            f"{CHANNELS.name} not found. Start from the template: cp channels.yaml.example channels.yaml"
+            f"{path.name} not found. Start from the template: cp channels.yaml.example channels.yaml"
         )
 
-    entries = yaml.safe_load(CHANNELS.read_text(encoding="utf-8")) or []
+    entries = yaml.safe_load(path.read_text(encoding="utf-8")) or []
     if not isinstance(entries, list):
-        fail(f"{CHANNELS.name} must be a list of entries")
+        fail(f"{path.name} must be a list of entries")
 
     channel_map: dict[str, list] = {}
     names: dict[str, str] = {}
@@ -110,28 +101,8 @@ def load_channels() -> tuple[dict[str, list], dict[str, str]]:
     if errors:
         fail("channels.yaml:\n  " + "\n  ".join(errors))
     if not channel_map:
-        fail(f"{CHANNELS.name} lists no channels")
+        fail(f"{path.name} lists no channels")
     return channel_map, names
-
-
-def samconfig_overrides() -> dict[str, str]:
-    if not SAMCONFIG.exists():
-        fail(
-            "samconfig.toml not found. Start from the template: cp samconfig.toml.example samconfig.toml"
-        )
-    config = tomllib.loads(SAMCONFIG.read_text(encoding="utf-8"))
-    raw = (
-        config.get("default", {})
-        .get("deploy", {})
-        .get("parameters", {})
-        .get("parameter_overrides", "")
-    )
-    overrides = {}
-    for token in shlex.split(raw):
-        key, _, value = token.partition("=")
-        if key and key not in OBSOLETE:
-            overrides[key] = value
-    return overrides
 
 
 def check_youtube(channel_map, names) -> list[str]:
@@ -167,8 +138,8 @@ def telegram(token: str, method: str, **params) -> dict:
         return json.load(error)
 
 
-def check_telegram(channel_map, overrides) -> None:
-    param = overrides.get("BotTokenParam", "/autouploadbot/bot-token")
+def check_telegram(channel_map) -> None:
+    param = "/autouploadbot/bot-token"
     token = subprocess.run(
         [
             "aws",
@@ -222,40 +193,62 @@ def check_telegram(channel_map, overrides) -> None:
         fail("Telegram:\n  " + "\n  ".join(problems))
 
 
-def main() -> None:
-    dry_run = "--dry-run" in sys.argv
-    skip_checks = "--no-check" in sys.argv
+def to_item(youtube: str, name: str, chats: list) -> str:
+    return json.dumps({
+        "youtube_id": {"S": youtube},
+        "name": {"S": name},
+        "chats": {"L": [{"S": str(chat)} for chat in chats]},
+        "added_at": {"N": str(int(time.time()))},
+    })
 
-    channel_map, names = load_channels()
-    overrides = samconfig_overrides()
-    overrides["ChannelMap"] = ",".join(
-        f"{channel}:{'|'.join(str(chat) for chat in chats)}"
-        for channel, chats in channel_map.items()
-    )
 
-    chats = {c for cs in channel_map.values() for c in cs}
-    print(f"{len(channel_map)} YouTube channel(s) → {len(chats)} Telegram chat(s)")
+def cmd_list() -> None:
+    channels = stack.channels_from_table()
+    for youtube, entry in sorted(channels.items(), key=lambda kv: kv[1]["name"].lower()):
+        print(f"{entry['name']:24} {youtube}  → {', '.join(map(str, entry['chats']))}")
+    print(f"{len(channels)} channel(s)")
 
+
+def cmd_import(path: Path, skip_checks: bool) -> None:
+    channel_map, names = load_yaml(path)
     if not skip_checks:
         print("YouTube:")
         warnings = check_youtube(channel_map, names)
         print("Telegram:")
-        check_telegram(channel_map, overrides)
+        check_telegram(channel_map)
         for warning in warnings:
             print(f"warning: {warning}")
+    table = stack.resource("ChannelsTable")
+    for youtube, chats in channel_map.items():
+        stack.aws("dynamodb", "put-item", "--table-name", table, "--item", to_item(youtube, names[youtube], chats))
+    print(f"Imported {len(channel_map)} channel(s). Functions pick them up on their next run.")
 
-    if len(overrides["ChannelMap"]) > 4000:
-        fail("the channel map exceeds the 4 KB limit of a stack parameter")
 
-    args = [f"{key}={value}" for key, value in overrides.items()]
-    if dry_run:
-        print("\nDry run. Would deploy with:\n  " + "\n  ".join(args))
-        return
+def cmd_export(path: Path) -> None:
+    lines = ["# Exported from ChannelsTable. Re-import with: python3 tools/channels.py import", ""]
+    for youtube, entry in sorted(stack.channels_from_table().items(), key=lambda kv: kv[1]["name"].lower()):
+        lines += [f"- name: {entry['name']}", f"  youtube: {youtube}"]
+        if len(entry["chats"]) == 1:
+            lines.append(f"  telegram: {json.dumps(entry['chats'][0])}")
+        else:
+            lines.append("  telegram:")
+            lines += [f"    - {json.dumps(chat)}" for chat in entry["chats"]]
+        lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"Wrote {path}")
 
-    subprocess.run(["sam", "build"], cwd=ROOT, check=True)
-    subprocess.run(
-        ["sam", "deploy", "--parameter-overrides", *args], cwd=ROOT, check=True
-    )
+
+def main() -> None:
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if not args or args[0] not in ("list", "import", "export"):
+        sys.exit(__doc__)
+    path = Path(args[1]) if len(args) > 1 else stack.ROOT / "channels.yaml"
+    if args[0] == "list":
+        cmd_list()
+    elif args[0] == "import":
+        cmd_import(path, "--no-check" in sys.argv)
+    else:
+        cmd_export(path)
 
 
 if __name__ == "__main__":

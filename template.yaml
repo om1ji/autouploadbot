@@ -3,24 +3,26 @@ Transform: AWS::Serverless-2016-10-31
 Description: YouTube audio uploader - событийная схема на Lambda
 
 Parameters:
-  ChannelMap:
-    Type: String
-    # «UC…:чат|чат,UC…:чат» без кавычек (их SAM искажает); собирается из
-    # channels.yaml командой tools/deploy.py
-    AllowedPattern: '^UC[\w-]{22}:[-@\w|]+(,UC[\w-]{22}:[-@\w|]+)*$'
-    ConstraintDescription: карта каналов — деплойте через tools/deploy.py, он собирает её из channels.yaml
-    Description: Какие каналы YouTube смотреть и в какие чаты Telegram отправлять треки каждого
   AdminChatId:
     Type: String
     AllowedPattern: '^-?[0-9]+$'
     ConstraintDescription: числовой ID чата Telegram
     Description: Служебный чат — сюда приходят алярмы; обычно ваш личный ID в Telegram
+  AdminUtcOffset:
+    Type: String
+    Default: '0'
+    AllowedPattern: '^[-+]?[0-9]{1,2}(\.5)?$'
+    Description: Часовой пояс служебного чата — смещение от UTC в часах, для времени в статусе
   BotTokenParam:
     Type: String
     Default: /autouploadbot/bot-token
   HubSecretParam:
     Type: String
     Default: /autouploadbot/hub-secret
+  TelegramSecretParam:
+    Type: String
+    Default: /autouploadbot/telegram-secret
+    Description: Секрет вебхука бота-пульта; создаёт tools/telegram_webhook.py
   LeaseSeconds:
     Type: String
     Default: '432000'
@@ -87,6 +89,35 @@ Resources:
         - AttributeName: item_id
           KeyType: HASH
 
+  # Какие каналы YouTube смотреть и в какие чаты Telegram слать каждый.
+  # Правится на лету из служебного чата; функции читают её при запуске
+  ChannelsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: youtube_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: youtube_id
+          KeyType: HASH
+
+  # Состояние бота-пульта между сообщениями: шаг диалога добавления канала,
+  # чаты, куда бота добавили. Диалоги истекают сами по TTL
+  BotStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: key
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+
   # ---------- cookies YouTube ----------
 
   CookiesBucket:
@@ -134,7 +165,7 @@ Resources:
         Size: 4096
       Environment:
         Variables:
-          CHANNEL_MAP: !Ref ChannelMap
+          CHANNELS_TABLE: !Ref ChannelsTable
           BOT_TOKEN_PARAM: !Ref BotTokenParam
           DEDUP_TABLE: !Ref DedupTable
           COOKIES_BUCKET: !Ref CookiesBucket
@@ -160,6 +191,8 @@ Resources:
               MaximumRetryAttempts: 0
       Policies:
         - CloudWatchPutMetricPolicy: {}
+        - DynamoDBReadPolicy:
+            TableName: !Ref ChannelsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref DedupTable
         - S3ReadPolicy:
@@ -182,7 +215,7 @@ Resources:
       Timeout: 60
       Environment:
         Variables:
-          CHANNEL_MAP: !Ref ChannelMap
+          CHANNELS_TABLE: !Ref ChannelsTable
           QUEUE_URL: !Ref VideoQueue
           SEEN_TABLE: !Ref SeenTable
       Events:
@@ -195,6 +228,8 @@ Resources:
             QueueName: !GetAtt VideoQueue.QueueName
         - DynamoDBCrudPolicy:
             TableName: !Ref SeenTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref ChannelsTable
 
   # ---------- продление подписки ----------
 
@@ -211,7 +246,7 @@ Resources:
         Variables:
           # URL известен прямо в шаблоне — двухфазный деплой не нужен
           CALLBACK_URL: !GetAtt WebhookFunctionUrl.FunctionUrl
-          CHANNEL_MAP: !Ref ChannelMap
+          CHANNELS_TABLE: !Ref ChannelsTable
           LEASE_SECONDS: !Ref LeaseSeconds
           HUB_SECRET_PARAM: !Ref HubSecretParam
       Events:
@@ -229,6 +264,63 @@ Resources:
             Input: '{"force": true}'
       Policies:
         - !Ref SsmReadPolicy
+        - DynamoDBReadPolicy:
+            TableName: !Ref ChannelsTable
+
+  # ---------- бот-пульт ----------
+
+  # Служебный чат с инлайн-кнопками: статус, каналы, зеркала, заливка.
+  # Telegram шлёт сюда апдейты; подлинность — по секретному заголовку
+  AdminBotFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/ingest/
+      Handler: admin.app.handler
+      Runtime: python3.12
+      Timeout: 30
+      FunctionUrlConfig:
+        AuthType: NONE
+      Environment:
+        Variables:
+          ADMIN_CHAT_ID: !Ref AdminChatId
+          ADMIN_UTC_OFFSET: !Ref AdminUtcOffset
+          BOT_TOKEN_PARAM: !Ref BotTokenParam
+          HUB_SECRET_PARAM: !Ref HubSecretParam
+          TELEGRAM_SECRET_PARAM: !Ref TelegramSecretParam
+          CHANNELS_TABLE: !Ref ChannelsTable
+          STATE_TABLE: !Ref BotStateTable
+          DEDUP_TABLE: !Ref DedupTable
+          SEEN_TABLE: !Ref SeenTable
+          QUEUE_URL: !Ref VideoQueue
+          DLQ_URL: !Ref VideoDLQ
+          HUB_CALLBACK_URL: !GetAtt WebhookFunctionUrl.FunctionUrl
+          RESUBSCRIBE_FUNCTION: !Ref ResubscribeFunction
+          STACK_NAME: !Ref AWS::StackName
+      Policies:
+        - !Ref SsmReadPolicy
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ChannelsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BotStateTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SeenTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref DedupTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt VideoQueue.QueueName
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ResubscribeFunction
+        - Statement:
+            - Effect: Allow
+              Action: sqs:GetQueueAttributes
+              Resource:
+                - !GetAtt VideoQueue.Arn
+                - !GetAtt VideoDLQ.Arn
+            - Effect: Allow
+              Action:
+                - cloudwatch:DescribeAlarms
+                - cloudwatch:GetMetricStatistics
+              Resource: '*'
 
   # ---------- алярмы ----------
 
@@ -325,6 +417,7 @@ Resources:
             Resource:
               - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BotTokenParam}
               - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${HubSecretParam}
+              - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TelegramSecretParam}
           - Effect: Allow
             Action: kms:Decrypt
             Resource: '*'
@@ -343,6 +436,12 @@ Outputs:
     Value: !Ref VideoDLQ
   ResubscribeFunctionName:
     Value: !Ref ResubscribeFunction
+  AdminBotUrl:
+    Description: Вебхук бота-пульта; tools/telegram_webhook.py регистрирует его в Telegram
+    Value: !GetAtt AdminBotFunctionUrl.FunctionUrl
+  ChannelsTableName:
+    Description: Карта каналов; tools/channels.py импортирует и экспортирует её
+    Value: !Ref ChannelsTable
   CookiesBucketName:
     Description: Сюда кладётся cookies.txt для yt-dlp
     Value: !Ref CookiesBucket

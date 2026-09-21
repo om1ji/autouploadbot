@@ -23,13 +23,19 @@ logging.getLogger().setLevel(logging.INFO)
 
 FEED_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={}"
 
-# карта «UC…:чаты,UC…:чаты» из channels.yaml; опросу нужны только каналы
-CHANNEL_IDS = [pair.partition(":")[0] for pair in os.environ["CHANNEL_MAP"].split(",") if pair]
 QUEUE_URL = os.environ["QUEUE_URL"]
 
 sqs = boto3.client("sqs")
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(os.environ["SEEN_TABLE"])
+channels_table = dynamodb.Table(os.environ["CHANNELS_TABLE"])
+
+
+def channel_ids() -> list[str]:
+    """Каналы из ChannelsTable — читаем на каждом запуске, чтобы правки из
+    служебного чата действовали без деплоя."""
+    items = channels_table.scan(ProjectionExpression="youtube_id")["Items"]
+    return [item["youtube_id"] for item in items]
 
 
 def fetch_entries(channel_id: str) -> list[dict]:
@@ -125,7 +131,8 @@ def handler(event, context):
     failed = []
 
     # каналы независимы: недоступный фид одного не мешает остальным
-    for channel_id in CHANNEL_IDS:
+    ids = channel_ids()
+    for channel_id in ids:
         try:
             results[channel_id] = poll_channel(channel_id)
         except Exception:
@@ -134,7 +141,7 @@ def handler(event, context):
 
     logging.info("Result: %s", json.dumps(results))
 
-    if failed and len(failed) == len(CHANNEL_IDS):
+    if failed and len(failed) == len(ids):
         raise RuntimeError("All feeds failed")
 
     return results

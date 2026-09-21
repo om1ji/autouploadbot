@@ -15,6 +15,7 @@ import json
 import pathlib
 import re
 import subprocess
+import sys
 import urllib.request
 
 FEED = """<?xml version="1.0" encoding="UTF-8"?>
@@ -41,13 +42,13 @@ def default_stack() -> str:
 
 
 def default_channel() -> str | None:
-    """Первый канал из channels.yaml — если тестируете без --channel."""
-    config = pathlib.Path(__file__).resolve().parent.parent / "channels.yaml"
-    if config.is_file():
-        found = re.search(r"youtube:\s*(UC[\w-]{22})", config.read_text())
-        if found:
-            return found.group(1)
-    return None
+    """Первый канал из ChannelsTable — если тестируете без --channel."""
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    import stack
+    try:
+        return next(iter(stack.channels_from_table()), None)
+    except Exception:
+        return None
 
 
 def run(*command: str) -> str:
@@ -69,11 +70,11 @@ def main() -> None:
     parser.add_argument("--title", default="Test Artist — Test Track",
                         help="заголовок в формате 'Исполнитель — Трек'")
     parser.add_argument("--channel", default=default_channel(),
-                        help="YouTube-канал ролика: по нему воркер выбирает чаты (по умолчанию — первый из channels.yaml)")
+                        help="YouTube-канал ролика: по нему воркер выбирает чаты (по умолчанию — первый из ChannelsTable)")
     parser.add_argument("--secret-param", default="/autouploadbot/hub-secret")
     args = parser.parse_args()
     if not args.channel:
-        parser.error("--channel is required: no channels.yaml to take a default from")
+        parser.error("--channel is required: ChannelsTable is empty or unreachable")
 
     video_id = args.video.rsplit("v=", 1)[-1].split("&")[0]
     url = stack_output(args.stack, "WebhookUrl")

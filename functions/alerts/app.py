@@ -36,6 +36,8 @@ def send(text: str, chat_id: str | int = ADMIN_CHAT_ID) -> None:
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
+            # кнопку обрабатывает бот-пульт: статус приходит новым сообщением
+            "reply_markup": {"inline_keyboard": [[{"text": "📊 Статус", "callback_data": "newstatus"}]]},
         }).encode(),
         headers={"Content-Type": "application/json"},
     )
