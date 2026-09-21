@@ -26,7 +26,8 @@ FEED_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={}"
 
 CALLBACK_URL = os.environ["CALLBACK_URL"]
 # URL фида собираем сами: вариант с /xml/feeds/ выглядит похоже, но это заглушка
-CHANNEL_IDS = [c.strip() for c in os.environ["CHANNEL_IDS"].split(",") if c.strip()]
+# карта «UC…:чаты,UC…:чаты» из channels.yaml; подписке нужны только каналы
+CHANNEL_IDS = [pair.partition(":")[0] for pair in os.environ["CHANNEL_MAP"].split(",") if pair]
 LEASE_SECONDS = os.environ.get("LEASE_SECONDS", "432000")
 HUB_SECRET_PARAM = os.environ["HUB_SECRET_PARAM"]
 

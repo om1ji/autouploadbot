@@ -1,7 +1,8 @@
 # autouploadbot
 
 A serverless bot that watches YouTube channels and reposts every new upload
-to a Telegram channel as an MP3 with cover art, artist and title.
+to a Telegram channel as an MP3 with cover art, artist and title, captioned
+with an "Original upload" link back to the video.
 
 It runs entirely on AWS Lambda and costs cents per month: the only paid
 line items are ECR image storage and a few DynamoDB reads.
@@ -21,13 +22,20 @@ same SQS queue:
 | **Push** | the WebSub hub POSTs a signed Atom entry to `WebhookFunction` | seconds | a verified hub subscription |
 | **Poll** | `PollFunction` reads each channel's RSS feed every 15 minutes | up to 15 min | nothing but YouTube |
 
-Both paths produce identical messages. If a video arrives through both,
-`WorkerFunction` claims its `videoId` in DynamoDB first, so it reaches the
-channel exactly once. The same claim protects against YouTube re-sending a
-notification when a title is edited, and against SQS at-least-once delivery.
+Both paths produce identical messages carrying the video's YouTube channel.
+`channels.yaml` maps every YouTube channel to one or more Telegram chats, so a
+channel can have its own mirror, several channels can share a chat, and one
+channel can be posted to several chats.
+
+For every target chat the worker claims `videoId#chat` in DynamoDB first, so
+each chat gets a video exactly once — even when it arrives through both paths,
+when YouTube re-sends a notification after a title edit, or when SQS delivers
+a message twice. If one chat fails, the retry goes only to that chat. The
+audio is downloaded once, however many chats receive it.
 
 The worker downloads the audio with `yt-dlp`, converts it to MP3 with
-`ffmpeg` and sends it through the Telegram Bot API. A failed attempt releases
+`ffmpeg` and sends it through the Telegram Bot API with an "Original upload"
+link to the video in the caption. A failed attempt releases
 its claim and raises, so SQS retries it; after three failed receives the
 message moves to `VideoDLQ` instead of disappearing.
 
@@ -51,6 +59,13 @@ message moves to `VideoDLQ` instead of disappearing.
   carve up.
 - **`/tmp` on Lambda is real ephemeral disk** (4 GB here) and does not eat
   into the function's memory, so long mixes fit without a bigger instance.
+- **Artwork goes two ways.** The Bot API accepts a `thumbnail` of at most
+  320×320 and 200 KB, so the worker crops the best YouTube thumbnail
+  (1280×720) to its centre square — label artwork sits there between black
+  bars — embeds the full 720×720 cover in the MP3's ID3 tags together with
+  artist and title, and sends a 320×320 copy as the thumbnail. The track also
+  carries its duration from the YouTube metadata: without it Telegram clients
+  may show `0:00` for a VBR MP3 until it is played.
 
 ## Repository layout
 
@@ -68,10 +83,14 @@ worker/                  container image (yt-dlp, deno, ffmpeg)
   app/telegram.py          sendAudio via aiogram
   app/dedup.py             DynamoDB claim / release
 tools/
+  deploy.py                validate channels.yaml, check access, build and deploy
   send_test_event.py       sign and send a fake hub notification
   curl_to_cookies.py       turn DevTools cookies into cookies.txt
+  upload_cookies.sh        clipboard → cookies.txt → S3
+  backfill.py              post the latest N videos of each channel to its chats
 docs/diagrams/           archify sources (.json) and interactive diagrams (.html)
 template.yaml            the whole stack: 2 queues, 2 tables, a bucket, 4 functions, IAM
+channels.yaml.example    YouTube channel → Telegram chats, to copy
 samconfig.toml.example   deploy parameters to copy
 ```
 
@@ -82,7 +101,8 @@ samconfig.toml.example   deploy parameters to copy
 - AWS CLI with credentials — preferably an IAM user, not the root account
 - [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
 - Docker, running: `sam build` builds the worker image locally
-- A Telegram bot that is an admin of the target channel
+- Python 3.11+ with PyYAML for `tools/deploy.py` (`pip install pyyaml`)
+- A Telegram bot that is an admin, allowed to post, in every target chat
 
 ### 1. Secrets
 
@@ -102,7 +122,29 @@ with it. The webhook's Function URL is public by necessity — the hub cannot
 authenticate to AWS — and rejects anything without a valid
 `X-Hub-Signature` with `403`.
 
-### 2. Parameters
+### 2. Channels
+
+```bash
+cp channels.yaml.example channels.yaml
+```
+
+```yaml
+- name: HATE                         # optional, for your reference
+  youtube: UC6qQOTx9LuKMC5p2dbjmSRg
+  telegram: -1001234567890           # one chat…
+
+- name: Analogue Network
+  youtube: UChw9qhUv_dXczPkFQ922nFQ
+  telegram:                          # …or several
+    - -1001234567890
+    - "@public_mirror"
+```
+
+`channels.yaml` is git-ignored — chat IDs are private. Channels and supergroups
+have IDs starting with `-100`; without the minus Telegram answers
+`chat not found`. A public channel can be given as `"@username"`.
+
+### 3. Other parameters
 
 ```bash
 cp samconfig.toml.example samconfig.toml
@@ -110,23 +152,29 @@ cp samconfig.toml.example samconfig.toml
 
 | Parameter | Meaning |
 | --- | --- |
-| `TargetChatId` | Telegram chat to post to. Channels and supergroups start with `-100`: `-1001234567890`. Without the minus Telegram answers `chat not found`. |
-| `ChannelIds` | YouTube channel IDs, comma-separated, no spaces: `UCxxx…,UCyyy…`. The template rejects anything that is not `UC` + 22 characters. |
 | `LeaseSeconds` | WebSub lease, default and maximum `432000` (5 days). |
 | `WorkerConcurrency` | How many tracks download in parallel, default `5`, minimum `2`. |
 | `BotTokenParam`, `HubSecretParam` | SSM parameter names, defaults as above. |
 
-### 3. Build and deploy
+### 4. Deploy
 
 ```bash
-sam build
-sam deploy
+python3 tools/deploy.py              # validate, check, build, deploy
+python3 tools/deploy.py --dry-run    # everything except the deploy
 ```
+
+Always deploy through this script rather than a bare `sam deploy`: it turns
+`channels.yaml` into the `ChannelMap` stack parameter and merges it with the
+overrides from `samconfig.toml`. Before deploying it checks that every YouTube
+ID has a feed (and that its author matches `name`) and that the bot is an admin
+allowed to post in every chat — a chat ID without its minus is caught here,
+not by the first failed track. A bare `sam deploy` fails on the missing
+`ChannelMap` rather than deploying without it.
 
 On the first deploy SAM warns that `WebhookFunction` has no authentication —
 answer `y`, that is intended.
 
-### 4. First run
+### 5. First run
 
 ```bash
 STACK=autouploadbot   # your stack_name
@@ -139,13 +187,26 @@ aws lambda invoke --function-name "$(out ResubscribeFunctionName)" /dev/stdout
 
 The first `PollFunction` run (within 15 minutes) posts nothing: it marks the
 15 videos already in each feed as seen, otherwise the whole back catalogue
-would land in the channel. A channel added to `ChannelIds` later is handled
-the same way.
+would land in the channel. A channel added to `channels.yaml` later is
+handled the same way.
 
 ## Adding a channel
 
-Append its ID to `ChannelIds` in `samconfig.toml`, then `sam build && sam deploy`.
-Callback, queue and deduplication are shared by all channels.
+Add an entry to `channels.yaml` and run `python3 tools/deploy.py`. Callback,
+queue and deduplication are shared by all channels; the new channel's
+subscription is picked up by the next hourly `ResubscribeFunction` run. Adding
+the bot to a new chat works the same way: make it an admin allowed to post,
+then deploy — the check tells you if you forgot.
+
+A new channel or mirror starts empty. To seed it with the latest videos:
+
+```bash
+python3 tools/backfill.py --latest 3 [--channel UC…] [--dry-run]
+```
+
+It queues the chosen videos in waves — the oldest first, the next once the
+queue has drained — so every chat gets them in YouTube order, and skips
+anything a chat already has.
 
 An ID looks like `UC` followed by 22 characters. For a `youtube.com/@handle`
 link it is in the page source:
@@ -182,21 +243,40 @@ you need both:
 Use a separate account, not your main one: regular downloads from a datacenter
 IP with its cookies can get it blocked.
 
-Export the cookies from a private window so the browser does not keep
-rotating them: log in, open any video, then DevTools → Application →
-Cookies → `https://www.youtube.com`, select all rows and copy. Close the window
-without logging out — logging out invalidates the session.
+Export the cookies from a **private (incognito) window**, not from your normal
+browser session: the browser keeps rotating the cookies of a session in use,
+and an exported copy of such a session dies within the hour. Log in, open any
+video, then DevTools → Application → Cookies → `https://www.youtube.com`,
+select all rows and copy. Close the window without logging out — logging out
+invalidates the session — and do not use that session again.
+
+Then **type** (do not copy-paste — that would overwrite the cookies in the
+clipboard):
 
 ```bash
-pbpaste | python3 tools/curl_to_cookies.py > cookies.txt
-aws s3 cp cookies.txt "s3://$(out CookiesBucketName)/cookies.txt"
+tools/upload_cookies.sh
 ```
 
-`curl_to_cookies.py` also accepts "Copy as cURL" from the Network tab or a bare
-`Cookie` header value. It never prints cookie values — only their names and
-whether the session looks logged in. When cookies expire, repeat these two
-commands; no rebuild or deploy is needed. `cookies*.txt` is git-ignored and
-excluded from the image.
+It converts the clipboard with `tools/curl_to_cookies.py`, uploads the result
+to `CookiesBucket` of the stack named in `samconfig.toml` and deletes the local
+copy. The converter accepts rows from Application → Cookies, "Copy as cURL"
+from the Network tab or a bare `Cookie` header value, never prints cookie
+values, and refuses anything without signs of a logged-in session — so a
+clipboard holding something else stops the upload instead of replacing good
+cookies with junk.
+
+When cookies expire, downloads fail with `Sign in to confirm you're not a bot`
+and the videos pile up in `VideoDLQ`. Upload fresh cookies, then move the
+failed videos back:
+
+```bash
+aws sqs start-message-move-task --source-arn \
+  "$(aws sqs get-queue-attributes --queue-url "$(out DeadLetterQueueUrl)" \
+     --attribute-names QueueArn --query Attributes.QueueArn --output text)"
+```
+
+Deduplication skips anything that already reached the channel. Messages stay
+in the DLQ for 14 days, counted from when the video was first queued.
 
 ## WebSub subscription
 
@@ -246,14 +326,16 @@ hand.
 ```bash
 python3 tools/send_test_event.py \
   --video 'https://www.youtube.com/watch?v=VIDEO_ID' \
-  --title 'Artist — Track'
+  --title 'Artist — Track' \
+  --channel UC…            # routes like a video of that channel
 ```
 
 The script signs a fake Atom notification with the same `hub-secret` and posts
 it to the webhook, so everything after the hub runs for real: signature check,
 queue, worker, YouTube, Telegram. The track is actually posted. Running it
-again for the same video does nothing — deduplication skips it. The stack name
-defaults to `stack_name` from `samconfig.toml`.
+again for the same video does nothing — deduplication skips it. `--channel`
+defaults to the first channel in `channels.yaml`, the stack name to
+`stack_name` from `samconfig.toml`.
 
 ## Operations
 

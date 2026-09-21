@@ -23,7 +23,8 @@ logging.getLogger().setLevel(logging.INFO)
 
 FEED_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={}"
 
-CHANNEL_IDS = [c.strip() for c in os.environ["CHANNEL_IDS"].split(",") if c.strip()]
+# карта «UC…:чаты,UC…:чаты» из channels.yaml; опросу нужны только каналы
+CHANNEL_IDS = [pair.partition(":")[0] for pair in os.environ["CHANNEL_MAP"].split(",") if pair]
 QUEUE_URL = os.environ["QUEUE_URL"]
 
 sqs = boto3.client("sqs")
@@ -96,6 +97,7 @@ def poll_channel(channel_id: str) -> dict:
         message = {
             "video_link": entry["video_link"],
             "video_id": entry["video_id"],
+            "channel_id": channel_id,
             "artist": artist,
             "track_name": track_name,
         }

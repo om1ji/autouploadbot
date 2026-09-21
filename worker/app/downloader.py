@@ -1,10 +1,13 @@
 import logging
 import os
 from pathlib import Path
+from typing import NamedTuple
 
 import boto3
 import yt_dlp
 from botocore.exceptions import ClientError
+
+from app import artwork
 
 MEDIA_DIR = os.environ.get("MEDIA_DIR", "/tmp/media")
 
@@ -64,8 +67,19 @@ def cookies_file() -> str | None:
     return str(COOKIES_PATH)
 
 
-def download(video_link: str) -> tuple[Path, Path | None]:
-    """Качает аудио и обложку. Возвращает пути к mp3 и jpg."""
+class Download(NamedTuple):
+    audio: Path
+    thumbnail: Path | None
+    # секунды; без неё клиенты Telegram у VBR-mp3 порой показывают 0:00
+    duration: int | None
+
+
+def download(video_link: str, artist: str | None = None, title: str | None = None) -> Download:
+    """Качает аудио, готовит обложку и встраивает её в mp3 вместе с тегами.
+
+    Длительность берётся из метаданных ролика. `thumbnail` в результате —
+    уже превью 320×320 для Telegram.
+    """
     Path(MEDIA_DIR).mkdir(parents=True, exist_ok=True)
 
     options = dict(YT_DLP_DOWNLOAD_OPTIONS)
@@ -77,10 +91,25 @@ def download(video_link: str) -> tuple[Path, Path | None]:
         base = Path(ydl.prepare_filename(info))
 
     audio = base.with_suffix(".mp3")
-    thumbnail = base.with_suffix(".jpg")
+    source = base.with_suffix(".jpg")
+    thumbnail = None
 
-    if not thumbnail.is_file():
+    if not source.is_file():
         logging.warning("No thumbnail for %s", video_link)
-        thumbnail = None
+    else:
+        cover = None
+        try:
+            cover = artwork.square_cover(source)
+            thumbnail = artwork.telegram_thumbnail(cover)
+            artwork.embed(audio, cover, artist, title)
+        except Exception:
+            # обложка не должна мешать доставке: трек уйдёт без неё
+            logging.exception("Artwork failed for %s, sending without it", video_link)
+            thumbnail = None
+        finally:
+            for path in (source, cover):
+                if path:
+                    path.unlink(missing_ok=True)
 
-    return audio, thumbnail
+    duration = info.get("duration")
+    return Download(audio, thumbnail, round(duration) if duration else None)

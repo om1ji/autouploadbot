@@ -1,0 +1,26 @@
+# Which YouTube channels to watch and which Telegram chats mirror each one.
+#
+#   cp channels.yaml.example channels.yaml
+#   python3 tools/deploy.py
+#
+# channels.yaml is git-ignored: chat IDs are private. Every change needs a
+# deploy — tools/deploy.py validates the file, checks that the bot can post to
+# every chat, and deploys.
+#
+# youtube   channel ID, "UC" + 22 characters. For a youtube.com/@handle link:
+#             curl -s https://www.youtube.com/@handle | grep -o '"externalId":"UC[^"]*"'
+# telegram  one chat or a list. Channels and supergroups start with -100;
+#           a public channel may also be given as "@username". The bot must be
+#           an admin allowed to post messages in each chat.
+# name      optional, for your own reference; deploy warns if it does not match
+#           the channel's name on YouTube.
+
+- name: First channel
+  youtube: UCxxxxxxxxxxxxxxxxxxxxxx
+  telegram: -1001234567890
+
+- name: Second channel, mirrored to two chats
+  youtube: UCyyyyyyyyyyyyyyyyyyyyyy
+  telegram:
+    - -1001234567890
+    - -1009876543210

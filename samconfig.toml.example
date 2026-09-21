@@ -12,9 +12,9 @@ s3_prefix = "autouploadbot"
 region = "us-west-1"
 confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
-# TargetChatId: channels and supergroups start with -100
-# ChannelIds:   comma-separated YouTube channel IDs, no spaces
-parameter_overrides = "TargetChatId=\"-1001234567890\" ChannelIds=\"UCxxxxxxxxxxxxxxxxxxxxxx,UCyyyyyyyyyyyyyyyyyyyyyy\""
+# The channel map (ChannelMap) comes from channels.yaml — deploy with
+# python3 tools/deploy.py, which merges it with these overrides.
+parameter_overrides = ""
 
 [default.global.parameters]
 region = "us-west-1"
