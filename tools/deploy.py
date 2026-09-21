@@ -145,7 +145,8 @@ def check_youtube(channel_map, names) -> list[str]:
             fail(
                 f"YouTube channel {channel} ({names[channel]}): feed returned {error.code} — wrong ID?"
             )
-        actual = author.text if author is not None else "?"
+        # YouTube иногда отдаёт имя с пробелом на конце («Lasha Mikaia »)
+        actual = (author.text or "").strip() if author is not None else "?"
         mark = "ok  " if names[channel] in (channel, actual) else "warn"
         if mark == "warn":
             warnings.append(
@@ -228,7 +229,8 @@ def main() -> None:
     channel_map, names = load_channels()
     overrides = samconfig_overrides()
     overrides["ChannelMap"] = ",".join(
-        f"{channel}:{'|'.join(str(chat) for chat in chats)}" for channel, chats in channel_map.items()
+        f"{channel}:{'|'.join(str(chat) for chat in chats)}"
+        for channel, chats in channel_map.items()
     )
 
     chats = {c for cs in channel_map.values() for c in cs}

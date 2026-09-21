@@ -80,6 +80,7 @@ tools/
   send_test_event.py       sign and send a fake hub notification
   curl_to_cookies.py       turn DevTools cookies into cookies.txt
   upload_cookies.sh        clipboard → cookies.txt → S3
+  backfill.py              post the latest N videos of each channel to its chats
 docs/diagrams/           archify sources (.json) and interactive diagrams (.html)
 template.yaml            the whole stack: 2 queues, 2 tables, a bucket, 4 functions, IAM
 channels.yaml.example    YouTube channel → Telegram chats, to copy
@@ -189,6 +190,16 @@ queue and deduplication are shared by all channels; the new channel's
 subscription is picked up by the next hourly `ResubscribeFunction` run. Adding
 the bot to a new chat works the same way: make it an admin allowed to post,
 then deploy — the check tells you if you forgot.
+
+A new channel or mirror starts empty. To seed it with the latest videos:
+
+```bash
+python3 tools/backfill.py --latest 3 [--channel UC…] [--dry-run]
+```
+
+It queues the chosen videos in waves — the oldest first, the next once the
+queue has drained — so every chat gets them in YouTube order, and skips
+anything a chat already has.
 
 An ID looks like `UC` followed by 22 characters. For a `youtube.com/@handle`
 link it is in the page source:
