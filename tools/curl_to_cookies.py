@@ -67,7 +67,9 @@ def parse_table(text: str) -> list[tuple[str, str, str]]:
 
 
 def main() -> None:
-    text = open(sys.argv[1], encoding="utf-8").read() if len(sys.argv) > 1 else sys.stdin.read()
+    args = [a for a in sys.argv[1:] if a != "--force"]
+    force = "--force" in sys.argv
+    text = open(args[0], encoding="utf-8").read() if args else sys.stdin.read()
 
     if not text.strip():
         sys.exit("Пусто. Точно ли cookies в буфере обмена?")
@@ -93,7 +95,11 @@ def main() -> None:
 
     missing = [m for m in AUTH_MARKERS if m not in names]
     if missing:
-        print(f"ВНИМАНИЕ: нет {', '.join(missing)} — похоже, сессия не залогинена", file=sys.stderr)
+        print(f"ОШИБКА: нет {', '.join(missing)} — сессия не залогинена "
+              "или в буфере не cookies (например, скопированная команда)", file=sys.stderr)
+        # ненулевой код останавливает `&&`: мусор не уедет в S3
+        if not force:
+            sys.exit(1)
     else:
         print("Признаки входа в аккаунт на месте", file=sys.stderr)
 

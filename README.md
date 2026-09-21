@@ -182,21 +182,40 @@ you need both:
 Use a separate account, not your main one: regular downloads from a datacenter
 IP with its cookies can get it blocked.
 
-Export the cookies from a private window so the browser does not keep
-rotating them: log in, open any video, then DevTools → Application →
-Cookies → `https://www.youtube.com`, select all rows and copy. Close the window
-without logging out — logging out invalidates the session.
+Export the cookies from a **private (incognito) window**, not from your normal
+browser session: the browser keeps rotating the cookies of a session in use,
+and an exported copy of such a session dies within the hour. Log in, open any
+video, then DevTools → Application → Cookies → `https://www.youtube.com`,
+select all rows and copy. Close the window without logging out — logging out
+invalidates the session — and do not use that session again.
+
+Then **type** (do not copy-paste — that would overwrite the cookies in the
+clipboard):
 
 ```bash
-pbpaste | python3 tools/curl_to_cookies.py > cookies.txt
-aws s3 cp cookies.txt "s3://$(out CookiesBucketName)/cookies.txt"
+tools/upload_cookies.sh
 ```
 
-`curl_to_cookies.py` also accepts "Copy as cURL" from the Network tab or a bare
-`Cookie` header value. It never prints cookie values — only their names and
-whether the session looks logged in. When cookies expire, repeat these two
-commands; no rebuild or deploy is needed. `cookies*.txt` is git-ignored and
-excluded from the image.
+It converts the clipboard with `tools/curl_to_cookies.py`, uploads the result
+to `CookiesBucket` of the stack named in `samconfig.toml` and deletes the local
+copy. The converter accepts rows from Application → Cookies, "Copy as cURL"
+from the Network tab or a bare `Cookie` header value, never prints cookie
+values, and refuses anything without signs of a logged-in session — so a
+clipboard holding something else stops the upload instead of replacing good
+cookies with junk.
+
+When cookies expire, downloads fail with `Sign in to confirm you're not a bot`
+and the videos pile up in `VideoDLQ`. Upload fresh cookies, then move the
+failed videos back:
+
+```bash
+aws sqs start-message-move-task --source-arn \
+  "$(aws sqs get-queue-attributes --queue-url "$(out DeadLetterQueueUrl)" \
+     --attribute-names QueueArn --query Attributes.QueueArn --output text)"
+```
+
+Deduplication skips anything that already reached the channel. Messages stay
+in the DLQ for 14 days, counted from when the video was first queued.
 
 ## WebSub subscription
 
