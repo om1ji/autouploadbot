@@ -74,6 +74,8 @@ functions/ingest/        zip, stdlib only
   app.py                   WebhookFunction: hub verification, HMAC check, enqueue
   poll.py                  PollFunction: RSS polling with backlog protection
   xml_parser.py            Atom parsing and "Artist — Track" title parsing
+functions/alerts/        zip, stdlib only
+  app.py                   AlertFunction: CloudWatch alarm → Telegram message
 functions/resubscribe/   zip, stdlib only
   app.py                   ResubscribeFunction: WebSub subscribe and renew
 worker/                  container image (yt-dlp, deno, ffmpeg)
@@ -81,6 +83,7 @@ worker/                  container image (yt-dlp, deno, ffmpeg)
   app/handler.py           WorkerFunction entry point
   app/downloader.py        yt-dlp download, cookies from S3
   app/artwork.py           square cover: embedded in the MP3, 320×320 thumbnail
+  app/probe.py             hourly cookie probe, reported as a CloudWatch metric
   app/telegram.py          sendAudio via aiogram
   app/dedup.py             DynamoDB claim / release
 tools/
@@ -90,7 +93,7 @@ tools/
   upload_cookies.sh        clipboard → cookies.txt → S3
   backfill.py              post the latest N videos of each channel to its chats
 docs/diagrams/           archify sources (.json) and interactive diagrams (.html)
-template.yaml            the whole stack: 2 queues, 2 tables, a bucket, 4 functions, IAM
+template.yaml            the whole stack: queues, tables, bucket, functions, alarms, IAM
 channels.yaml.example    YouTube channel → Telegram chats, to copy
 samconfig.toml.example   deploy parameters to copy
 ```
@@ -153,6 +156,7 @@ cp samconfig.toml.example samconfig.toml
 
 | Parameter | Meaning |
 | --- | --- |
+| `AdminChatId` | Your Telegram user ID: alerts go to your private chat with the bot. Send it `/start`, then read the ID from `getUpdates`. |
 | `LeaseSeconds` | WebSub lease, default and maximum `432000` (5 days). |
 | `WorkerConcurrency` | How many tracks download in parallel, default `5`, minimum `2`. |
 | `BotTokenParam`, `HubSecretParam` | SSM parameter names, defaults as above. |
@@ -358,6 +362,35 @@ Every worker deploy adds an image to ECR. Keep only the last two:
 aws ecr put-lifecycle-policy --repository-name <repo> --lifecycle-policy-text \
   '{"rules":[{"rulePriority":1,"description":"keep last 2","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":2},"action":{"type":"expire"}}]}'
 ```
+
+## Alerts
+
+Three CloudWatch alarms post to your private chat with the bot, both when
+something breaks and when it recovers:
+
+| Alarm | Fires when | Usually means |
+| --- | --- | --- |
+| `DeadLetterAlarm` | a message lands in `VideoDLQ` | a video failed three times — expired cookies, a file over 50 MB |
+| `QueueStuckAlarm` | a message waits in `VideoQueue` over an hour | the worker is not running or dies before processing |
+| `CookieProbeAlarm` | the hourly cookie probe fails | cookies expired — upload fresh ones before tracks start failing |
+
+The cookie probe runs `WorkerFunction` hourly with `{"probe": true}`: it asks
+YouTube for the metadata of a recent video exactly as a real download would —
+cookies, signature solving and all — but downloads nothing, and reports the
+result as the `autouploadbot/CookieProbe` metric. It never raises, because
+EventBridge Scheduler would otherwise retry a failed run up to 185 times.
+
+Alarm → SNS topic → `AlertFunction` → Telegram. Test the path without
+breaking anything:
+
+```bash
+aws cloudwatch set-alarm-state --state-value ALARM --state-reason test \
+  --alarm-name "$(aws cloudwatch describe-alarms --alarm-name-prefix "$STACK-CookieProbe" \
+     --query 'MetricAlarms[0].AlarmName' --output text)"
+```
+
+The alarm returns to `OK` on its next evaluation, which posts the recovery
+message too.
 
 ## Cost
 

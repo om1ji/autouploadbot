@@ -12,9 +12,11 @@ s3_prefix = "autouploadbot"
 region = "us-west-1"
 confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
+# AdminChatId: your Telegram user ID — alerts go there. Send /start to the bot,
+#   then read it from https://api.telegram.org/bot<token>/getUpdates
 # The channel map (ChannelMap) comes from channels.yaml — deploy with
 # python3 tools/deploy.py, which merges it with these overrides.
-parameter_overrides = ""
+parameter_overrides = "AdminChatId=\"123456789\""
 
 [default.global.parameters]
 region = "us-west-1"

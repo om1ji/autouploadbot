@@ -5,7 +5,7 @@ import os
 
 import boto3
 
-from app import dedup
+from app import dedup, probe
 from app.downloader import download
 from app.telegram import send_track
 
@@ -42,6 +42,9 @@ def bot_token() -> str:
 
 
 def handler(event, context):
+    # по расписанию приходит {"probe": true}, из SQS — Records
+    if event.get("probe"):
+        return probe.run(list(CHANNEL_MAP))
     for record in event["Records"]:
         process(json.loads(record["body"]))
 
