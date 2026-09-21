@@ -1,3 +1,5 @@
+**English** | [Русский](README.ru.md)
+
 # autouploadbot
 
 A serverless bot that watches YouTube channels and reposts every new upload
