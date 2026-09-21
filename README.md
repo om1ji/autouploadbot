@@ -52,7 +52,7 @@ message moves to `VideoDLQ` instead of disappearing.
 - **The webhook is a zip on the standard library**, while the worker is a
   container. The webhook has to answer the hub's verification quickly, so it
   cold-starts in a fraction of a second; the worker needs `ffmpeg` and `deno`,
-  so it ships as a 960 MB image and a ~10 s cold start that nobody waits on.
+  so it ships as a ~1 GB image and a ~10 s cold start that nobody waits on.
 - **Worker concurrency is capped on the SQS event source**
   (`MaximumConcurrency`), not with reserved concurrency: new AWS accounts
   have a Lambda concurrency limit of 10, which reserved concurrency cannot
@@ -80,6 +80,7 @@ worker/                  container image (yt-dlp, deno, ffmpeg)
   Dockerfile
   app/handler.py           WorkerFunction entry point
   app/downloader.py        yt-dlp download, cookies from S3
+  app/artwork.py           square cover: embedded in the MP3, 320×320 thumbnail
   app/telegram.py          sendAudio via aiogram
   app/dedup.py             DynamoDB claim / release
 tools/
@@ -129,12 +130,12 @@ cp channels.yaml.example channels.yaml
 ```
 
 ```yaml
-- name: HATE                         # optional, for your reference
-  youtube: UC6qQOTx9LuKMC5p2dbjmSRg
+- name: My channel                   # optional, for your reference
+  youtube: UCxxxxxxxxxxxxxxxxxxxxxx
   telegram: -1001234567890           # one chat…
 
-- name: Analogue Network
-  youtube: UChw9qhUv_dXczPkFQ922nFQ
+- name: Another channel
+  youtube: UCyyyyyyyyyyyyyyyyyyyyyy
   telegram:                          # …or several
     - -1001234567890
     - "@public_mirror"
@@ -308,12 +309,14 @@ Check the state:
 sam logs --stack-name "$STACK" -n ResubscribeFunction | grep 'state='
 ```
 
-> [!WARNING]
-> Since 19 September 2026 `pubsubhubbub.appspot.com` answers every subscribe
-> request with `503 Transient error` after ~20 s and never sends the
-> verification request, so subscriptions stay `unverified`. The poll path
-> covers delivery in the meantime; once the hub recovers, the hourly schedule
-> picks the subscriptions up without any action.
+> [!NOTE]
+> The hub can be down for days. From 19 to 21 September 2026
+> `pubsubhubbub.appspot.com` answered every subscribe request with
+> `503 Transient error` after ~20 s and sent no verification, so all
+> subscriptions stayed `unverified`. Nothing was lost: the poll path delivered
+> every video, and once the hub recovered the hourly schedule verified the
+> subscriptions without any action. A `5xx` from the hub is logged as
+> "degraded" for exactly this reason.
 
 Use the real channel feed as the topic,
 `https://www.youtube.com/feeds/videos.xml?channel_id=…`. The similar-looking
@@ -358,18 +361,21 @@ aws ecr put-lifecycle-policy --repository-name <repo> --lifecycle-policy-text \
 
 ## Cost
 
-For four channels and ~150 tracks a month:
+Assuming 200–400 tracks a month — a handful of channels posting once or twice
+a day:
 
 | Service | Usage | Cost |
 | --- | --- | --- |
-| Lambda | ~20k GB-s, ~4k invocations; free tier is 400k GB-s | $0 |
-| ECR | ~1 GB of images | ~$0.10 |
-| DynamoDB on-demand | polling reads the seen table, writes only new videos | ~$0.01 |
+| Lambda | ~20–30k GB-s, a few thousand invocations; free tier is 400k GB-s | $0 |
+| ECR | worker images, ~350 MB each, one more per deploy | ~$0.20, ~$0.07 with the lifecycle rule above |
+| DynamoDB on-demand | polling reads the seen table, writes only new videos | ~$0.02 |
 | SQS, EventBridge Scheduler, S3, SSM, data out | well inside free tiers | $0 |
 
-A track costs about 90 GB-s (40–50 s at 2 GB). Peak memory is ~600 MB, so
-`MemorySize` could drop to 1024, at the price of slower `ffmpeg` since Lambda
-CPU scales with memory.
+The number of chats barely matters: a video is downloaded once, and each extra
+chat costs a second of sending and ~10 MB of traffic. A track takes 15–50 s at
+2 GB, so the Lambda free tier lasts for roughly 8–10 thousand tracks a month.
+Peak memory is ~600 MB, so `MemorySize` could drop to 1024, at the price of
+slower `ffmpeg` since Lambda CPU scales with memory.
 
 ## Known limitations
 
@@ -389,7 +395,11 @@ zoom, search, relationship tracing, light and dark themes, exports — are in
 files next to them are the sources:
 
 ```bash
-archify deliver architecture docs/diagrams/architecture.json docs/diagrams/architecture.html --quality showcase
-archify deliver sequence docs/diagrams/video-pipeline.json docs/diagrams/video-pipeline.html --quality showcase
-archify deliver sequence docs/diagrams/websub-handshake.json docs/diagrams/websub-handshake.html --quality showcase
+ARCHIFY=<path-to-archify>/bin/archify.mjs
+node $ARCHIFY deliver architecture docs/diagrams/architecture.json docs/diagrams/architecture.html --quality showcase
+node $ARCHIFY deliver sequence docs/diagrams/video-pipeline.json docs/diagrams/video-pipeline.html --quality showcase
+node $ARCHIFY deliver sequence docs/diagrams/websub-handshake.json docs/diagrams/websub-handshake.html --quality showcase
 ```
+
+then replace the PNGs in `docs/images/` with a screenshot or an export of
+each diagram, in the light and dark themes.

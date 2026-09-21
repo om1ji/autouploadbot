@@ -5170,7 +5170,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <path data-edge-from="poll" data-edge-to="dedup" data-edge-label="seen" data-edge-key="8" data-edge-id="poll-dedup" data-composition-points="880,564;960,564" d="M 880 564 L 960 564" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="queue" data-edge-to="dlq" data-edge-label="3 failures" data-edge-key="9" data-edge-id="queue-dlq" data-composition-points="805,320;805,178" d="M 805 320 L 805 178" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="cookies" data-edge-to="worker" data-edge-label="cookies" data-edge-key="10" data-edge-id="cookies-worker" data-composition-points="1035,178;1035,320" d="M 1035 178 L 1035 320" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="worker" data-edge-to="dedup" data-edge-label="claim" data-edge-key="11" data-edge-id="worker-dedup" data-composition-points="1035,388;1035,530" d="M 1035 388 L 1035 530" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="worker" data-edge-to="dedup" data-edge-label="claim per chat" data-edge-key="11" data-edge-id="worker-dedup" data-composition-points="1035,388;1035,530" d="M 1035 388 L 1035 530" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
 
         <!-- Components -->
         <g id="node-youtube" data-node-id="youtube" data-node-label="YouTube" tabindex="0" role="button" aria-label="Focus YouTube, Channel feeds, Architecture component, YouTube" aria-pressed="false" data-node-kind="external" data-node-sublabel="Channel feeds" data-node-context="Architecture component" data-node-brand="YouTube" data-node-brand-id="youtube" data-node-brand-status="preset" data-node-brand-source="https://www.youtube.com/howyoutubeworks/resources/brand-resources/#logos-icons-and-colors">
@@ -5299,8 +5299,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="context" x="1035" y="578" class="t-muted" font-size="9" text-anchor="middle">Dedup + seen tables</text>
         </g>
 
-        <g id="node-telegram" data-node-id="telegram" data-node-label="Telegram" tabindex="0" role="button" aria-label="Focus Telegram, Target channel, Architecture component, Telegram" aria-pressed="false" data-node-kind="external" data-node-sublabel="Target channel" data-node-context="Architecture component" data-node-brand="Telegram" data-node-brand-id="telegram" data-node-brand-status="preset" data-node-brand-source="https://telegram.org/tour/screenshots">
-          <title>Telegram · Target channel · Architecture component · Telegram</title>
+        <g id="node-telegram" data-node-id="telegram" data-node-label="Telegram" tabindex="0" role="button" aria-label="Focus Telegram, Mirror chats, Architecture component, Telegram" aria-pressed="false" data-node-kind="external" data-node-sublabel="Mirror chats" data-node-context="Architecture component" data-node-brand="Telegram" data-node-brand-id="telegram" data-node-brand-status="preset" data-node-brand-source="https://telegram.org/tour/screenshots">
+          <title>Telegram · Mirror chats · Architecture component · Telegram</title>
           <rect x="1190" y="320" width="150" height="68" rx="6" class="c-mask"/>
           <rect x="1190" y="320" width="150" height="68" rx="6" class="c-external" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1196 326) scale(0.6875)">
@@ -5313,7 +5313,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
             <rect width="16" height="16" rx="4" class="brand-mark-frame"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="1265" y="352" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Telegram</text>
-        <text data-detail="context" x="1265" y="368" class="t-muted" font-size="9" text-anchor="middle">Target channel</text>
+        <text data-detail="context" x="1265" y="368" class="t-muted" font-size="9" text-anchor="middle">Mirror chats</text>
         </g>
 
         <!-- Connection labels -->
@@ -5361,9 +5361,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <rect x="1013.2" y="239" width="43.6" height="14" rx="3" class="c-mask"/>
           <text x="1035" y="249" class="t-muted" font-size="8" text-anchor="middle">cookies</text>
         </g>
-        <g data-detail="context" data-edge-from="worker" data-edge-to="dedup" data-edge-label="claim" data-edge-key="11" data-edge-id="worker-dedup">
-          <rect x="1018" y="449" width="34" height="14" rx="3" class="c-mask"/>
-          <text x="1035" y="459" class="t-muted" font-size="8" text-anchor="middle">claim</text>
+        <g data-detail="context" data-edge-from="worker" data-edge-to="dedup" data-edge-label="claim per chat" data-edge-key="11" data-edge-id="worker-dedup">
+          <rect x="996.4" y="449" width="77.2" height="14" rx="3" class="c-mask"/>
+          <text x="1035" y="459" class="t-muted" font-size="8" text-anchor="middle">claim per chat</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
@@ -5590,7 +5590,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <ul>
           <li>&bull; Push: hub POSTs a signed Atom entry within seconds</li>
           <li>&bull; Poll: RSS every 15 min, works without the hub</li>
-          <li>&bull; Both feed one queue; DynamoDB drops duplicates</li>
+          <li>&bull; Both feed one queue; each chat gets a video once</li>
         </ul>
       </div>
 
