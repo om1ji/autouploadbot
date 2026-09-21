@@ -28,5 +28,9 @@ def claim(video_id: str) -> bool:
         raise
 
 
+def exists(key: str) -> bool:
+    return "Item" in table.get_item(Key={"video_id": key})
+
+
 def release(video_id: str) -> None:
     table.delete_item(Key={"video_id": video_id})

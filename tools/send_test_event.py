@@ -22,6 +22,7 @@ FEED = """<?xml version="1.0" encoding="UTF-8"?>
       xmlns="http://www.w3.org/2005/Atom">
   <entry>
     <yt:videoId>{video_id}</yt:videoId>
+    <yt:channelId>{channel_id}</yt:channelId>
     <title>{title}</title>
     <link rel="alternate" href="{url}"/>
   </entry>
@@ -37,6 +38,16 @@ def default_stack() -> str:
         if found:
             return found.group(1)
     return "autouploadbot"
+
+
+def default_channel() -> str | None:
+    """Первый канал из channels.yaml — если тестируете без --channel."""
+    config = pathlib.Path(__file__).resolve().parent.parent / "channels.yaml"
+    if config.is_file():
+        found = re.search(r"youtube:\s*(UC[\w-]{22})", config.read_text())
+        if found:
+            return found.group(1)
+    return None
 
 
 def run(*command: str) -> str:
@@ -57,8 +68,12 @@ def main() -> None:
     parser.add_argument("--video", required=True, help="ссылка на ролик YouTube")
     parser.add_argument("--title", default="Test Artist — Test Track",
                         help="заголовок в формате 'Исполнитель — Трек'")
+    parser.add_argument("--channel", default=default_channel(),
+                        help="YouTube-канал ролика: по нему воркер выбирает чаты (по умолчанию — первый из channels.yaml)")
     parser.add_argument("--secret-param", default="/autouploadbot/hub-secret")
     args = parser.parse_args()
+    if not args.channel:
+        parser.error("--channel is required: no channels.yaml to take a default from")
 
     video_id = args.video.rsplit("v=", 1)[-1].split("&")[0]
     url = stack_output(args.stack, "WebhookUrl")
@@ -67,7 +82,7 @@ def main() -> None:
         "--with-decryption", "--query", "Parameter.Value", "--output", "text",
     )
 
-    body = FEED.format(video_id=video_id, title=args.title, url=args.video).encode()
+    body = FEED.format(video_id=video_id, channel_id=args.channel, title=args.title, url=args.video).encode()
     signature = hmac.new(secret.encode(), body, hashlib.sha1).hexdigest()
 
     request = urllib.request.Request(
@@ -79,7 +94,7 @@ def main() -> None:
     )
 
     print(f"→ {url}")
-    print(f"  videoId={video_id} title={args.title!r}")
+    print(f"  videoId={video_id} channel={args.channel} title={args.title!r}")
 
     with urllib.request.urlopen(request, timeout=30) as response:
         print(f"← {response.status} {response.read().decode(errors='replace')[:200]}")

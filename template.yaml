@@ -3,14 +3,13 @@ Transform: AWS::Serverless-2016-10-31
 Description: YouTube audio uploader - событийная схема на Lambda
 
 Parameters:
-  TargetChatId:
+  ChannelMap:
     Type: String
-    Description: ID чата, куда бот шлёт треки
-  ChannelIds:
-    Type: String
-    AllowedPattern: '^UC[\w-]{22}(,UC[\w-]{22})*$'
-    ConstraintDescription: ID каналов YouTube через запятую, без пробелов, каждый вида UC + 22 символа
-    Description: ID каналов YouTube через запятую (UC...), с которых забирать треки
+    # «UC…:чат|чат,UC…:чат» без кавычек (их SAM искажает); собирается из
+    # channels.yaml командой tools/deploy.py
+    AllowedPattern: '^UC[\w-]{22}:[-@\w|]+(,UC[\w-]{22}:[-@\w|]+)*$'
+    ConstraintDescription: карта каналов — деплойте через tools/deploy.py, он собирает её из channels.yaml
+    Description: Какие каналы YouTube смотреть и в какие чаты Telegram отправлять треки каждого
   BotTokenParam:
     Type: String
     Default: /autouploadbot/bot-token
@@ -130,7 +129,7 @@ Resources:
         Size: 4096
       Environment:
         Variables:
-          TARGET_CHAT_ID: !Ref TargetChatId
+          CHANNEL_MAP: !Ref ChannelMap
           BOT_TOKEN_PARAM: !Ref BotTokenParam
           DEDUP_TABLE: !Ref DedupTable
           COOKIES_BUCKET: !Ref CookiesBucket
@@ -168,7 +167,7 @@ Resources:
       Timeout: 60
       Environment:
         Variables:
-          CHANNEL_IDS: !Ref ChannelIds
+          CHANNEL_MAP: !Ref ChannelMap
           QUEUE_URL: !Ref VideoQueue
           SEEN_TABLE: !Ref SeenTable
       Events:
@@ -197,7 +196,7 @@ Resources:
         Variables:
           # URL известен прямо в шаблоне — двухфазный деплой не нужен
           CALLBACK_URL: !GetAtt WebhookFunctionUrl.FunctionUrl
-          CHANNEL_IDS: !Ref ChannelIds
+          CHANNEL_MAP: !Ref ChannelMap
           LEASE_SECONDS: !Ref LeaseSeconds
           HUB_SECRET_PARAM: !Ref HubSecretParam
       Events:

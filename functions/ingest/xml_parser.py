@@ -41,9 +41,14 @@ def parse_xml(xml: bytes | str) -> dict:
     else:
         video_id = video_link.rsplit("v=", 1)[-1]
 
+    # по каналу воркер выбирает, в какие чаты Telegram отправлять
+    channel_node = entry.find("yt:channelId", NS)
+    channel_id = channel_node.text if channel_node is not None else None
+
     artist, track_name = parse_artist_title(title)
 
     return {"video_link": video_link,
             "video_id": video_id,
+            "channel_id": channel_id,
             "artist": artist,
             "track_name": track_name}
