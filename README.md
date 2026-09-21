@@ -1,7 +1,8 @@
 # autouploadbot
 
 A serverless bot that watches YouTube channels and reposts every new upload
-to a Telegram channel as an MP3 with cover art, artist and title.
+to a Telegram channel as an MP3 with cover art, artist and title, captioned
+with an "Original upload" link back to the video.
 
 It runs entirely on AWS Lambda and costs cents per month: the only paid
 line items are ECR image storage and a few DynamoDB reads.
@@ -27,7 +28,8 @@ channel exactly once. The same claim protects against YouTube re-sending a
 notification when a title is edited, and against SQS at-least-once delivery.
 
 The worker downloads the audio with `yt-dlp`, converts it to MP3 with
-`ffmpeg` and sends it through the Telegram Bot API. A failed attempt releases
+`ffmpeg` and sends it through the Telegram Bot API with an "Original upload"
+link to the video in the caption. A failed attempt releases
 its claim and raises, so SQS retries it; after three failed receives the
 message moves to `VideoDLQ` instead of disappearing.
 
