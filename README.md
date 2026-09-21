@@ -59,6 +59,13 @@ message moves to `VideoDLQ` instead of disappearing.
   carve up.
 - **`/tmp` on Lambda is real ephemeral disk** (4 GB here) and does not eat
   into the function's memory, so long mixes fit without a bigger instance.
+- **Artwork goes two ways.** The Bot API accepts a `thumbnail` of at most
+  320×320 and 200 KB, so the worker crops the best YouTube thumbnail
+  (1280×720) to its centre square — label artwork sits there between black
+  bars — embeds the full 720×720 cover in the MP3's ID3 tags together with
+  artist and title, and sends a 320×320 copy as the thumbnail. The track also
+  carries its duration from the YouTube metadata: without it Telegram clients
+  may show `0:00` for a VBR MP3 until it is played.
 
 ## Repository layout
 

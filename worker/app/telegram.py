@@ -23,6 +23,7 @@ async def send_track(
     audio_path: Path,
     metadata: dict,
     thumbnail_path: Path | None,
+    duration: int | None = None,
 ) -> None:
     # Bot создаётся на каждый вызов: его aiohttp-сессия привязана к event loop,
     # а asyncio.run в каждом вызове Lambda поднимает новый
@@ -35,6 +36,7 @@ async def send_track(
             performer=metadata["artist"],
             title=metadata["track_name"],
             thumbnail=FSInputFile(thumbnail_path) if thumbnail_path else None,
+            duration=duration,
             caption=caption(metadata),
             parse_mode=ParseMode.HTML,
         )

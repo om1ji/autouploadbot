@@ -77,7 +77,9 @@ def process(data: dict) -> None:
     failed = []
     try:
         try:
-            audio, thumbnail = download(data["video_link"])
+            audio, thumbnail, duration = download(
+                data["video_link"], data.get("artist"), data.get("track_name")
+            )
         except Exception:
             for chat in pending:
                 dedup.release(claim_key(video_id, chat))
@@ -86,7 +88,7 @@ def process(data: dict) -> None:
         # качаем один раз, отправляем в каждый чат
         for chat in pending:
             try:
-                asyncio.run(send_track(bot_token(), chat, audio, data, thumbnail))
+                asyncio.run(send_track(bot_token(), chat, audio, data, thumbnail, duration))
                 logging.info("Uploaded %s to %s", video_id, chat)
             except Exception:
                 logging.exception("Sending %s to %s failed", video_id, chat)
