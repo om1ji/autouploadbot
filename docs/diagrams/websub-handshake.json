@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "WebSub subscription handshake",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [
+      1080,
+      632
+    ]
+  },
+  "participants": [
+    {
+      "id": "scheduler",
+      "type": "cloud",
+      "label": "EventBridge",
+      "sublabel": "hourly + daily"
+    },
+    {
+      "id": "resub",
+      "type": "backend",
+      "label": "ResubscribeFunction",
+      "sublabel": "per channel"
+    },
+    {
+      "id": "hub",
+      "type": "external",
+      "label": "WebSub hub",
+      "sublabel": "pubsubhubbub.appspot.com"
+    },
+    {
+      "id": "webhook",
+      "type": "security",
+      "label": "WebhookFunction",
+      "sublabel": "callback URL"
+    },
+    {
+      "id": "youtube",
+      "type": "external",
+      "label": "YouTube",
+      "sublabel": "publisher",
+      "brand": "youtube"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 334,
+      "label": "1. Subscribe"
+    },
+    {
+      "from": 356,
+      "to": 420,
+      "label": "2. Verify intent"
+    },
+    {
+      "from": 442,
+      "to": 536,
+      "label": "3. Deliver"
+    }
+  ],
+  "messages": [
+    {
+      "from": "scheduler",
+      "to": "resub",
+      "y": 176,
+      "label": "scheduled run",
+      "variant": "default"
+    },
+    {
+      "from": "resub",
+      "to": "hub",
+      "y": 212,
+      "label": "GET /subscription-details",
+      "variant": "default"
+    },
+    {
+      "from": "hub",
+      "to": "resub",
+      "y": 248,
+      "label": "State: unverified",
+      "variant": "return"
+    },
+    {
+      "from": "resub",
+      "to": "hub",
+      "y": 284,
+      "label": "POST /subscribe + hub.secret",
+      "variant": "emphasis"
+    },
+    {
+      "from": "hub",
+      "to": "resub",
+      "y": 320,
+      "label": "202 Accepted",
+      "variant": "return"
+    },
+    {
+      "from": "hub",
+      "to": "webhook",
+      "y": 370,
+      "label": "GET ?hub.challenge=…",
+      "variant": "security"
+    },
+    {
+      "from": "webhook",
+      "to": "hub",
+      "y": 406,
+      "label": "200, challenge echoed",
+      "variant": "return",
+      "note": "State: verified, lease 5 days"
+    },
+    {
+      "from": "youtube",
+      "to": "hub",
+      "y": 456,
+      "label": "publish ping",
+      "variant": "default"
+    },
+    {
+      "from": "hub",
+      "to": "webhook",
+      "y": 492,
+      "label": "POST Atom + X-Hub-Signature",
+      "variant": "emphasis"
+    },
+    {
+      "from": "webhook",
+      "to": "hub",
+      "y": 528,
+      "label": "202 Accepted",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "resub",
+      "from": 170,
+      "to": 328,
+      "type": "backend"
+    },
+    {
+      "participant": "hub",
+      "from": 206,
+      "to": 536,
+      "type": "external"
+    },
+    {
+      "participant": "webhook",
+      "from": 364,
+      "to": 414,
+      "type": "security"
+    },
+    {
+      "participant": "webhook",
+      "from": 486,
+      "to": 536,
+      "type": "security"
+    }
+  ]
+}

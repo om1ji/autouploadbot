@@ -1,0 +1,252 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: YouTube audio uploader - событийная схема на Lambda
+
+Parameters:
+  TargetChatId:
+    Type: String
+    Description: ID чата, куда бот шлёт треки
+  ChannelIds:
+    Type: String
+    AllowedPattern: '^UC[\w-]{22}(,UC[\w-]{22})*$'
+    ConstraintDescription: ID каналов YouTube через запятую, без пробелов, каждый вида UC + 22 символа
+    Description: ID каналов YouTube через запятую (UC...), с которых забирать треки
+  BotTokenParam:
+    Type: String
+    Default: /autouploadbot/bot-token
+  HubSecretParam:
+    Type: String
+    Default: /autouploadbot/hub-secret
+  LeaseSeconds:
+    Type: String
+    Default: '432000'
+  WorkerConcurrency:
+    Type: Number
+    Default: 5
+    MinValue: 2
+    Description: Сколько треков качается параллельно (минимум 2)
+
+Globals:
+  Function:
+    Architectures: [arm64]
+    Timeout: 15
+    MemorySize: 256
+    LoggingConfig:
+      LogFormat: JSON
+
+Resources:
+
+  # ---------- очередь ----------
+
+  VideoQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      # должен быть не меньше таймаута воркера, иначе SQS отдаст сообщение
+      # второму обработчику, пока первый ещё качает
+      VisibilityTimeout: 960
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt VideoDLQ.Arn
+        maxReceiveCount: 3
+
+  VideoDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+
+  # ---------- дедупликация ----------
+
+  DedupTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: video_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: video_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+
+  # Что опрос фидов уже видел. Отдельно от DedupTable: та отмечает
+  # обработанное воркером, а эта — замеченное в фиде, и смешивать их нельзя.
+  # Без TTL: ролик может сидеть в фиде месяцами, пока не выйдут 15 новых
+  SeenTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: item_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: item_id
+          KeyType: HASH
+
+  # ---------- cookies YouTube ----------
+
+  CookiesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # ---------- вебхук ----------
+
+  WebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/ingest/
+      Handler: app.handler
+      Runtime: python3.12
+      FunctionUrlConfig:
+        AuthType: NONE
+      Environment:
+        Variables:
+          QUEUE_URL: !Ref VideoQueue
+          HUB_SECRET_PARAM: !Ref HubSecretParam
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt VideoQueue.QueueName
+        - !Ref SsmReadPolicy
+
+  # ---------- воркер ----------
+
+  WorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Timeout: 900
+      MemorySize: 2048
+      # у Lambda /tmp — настоящий эфемерный диск, он не отъедает MemorySize
+      EphemeralStorage:
+        Size: 4096
+      Environment:
+        Variables:
+          TARGET_CHAT_ID: !Ref TargetChatId
+          BOT_TOKEN_PARAM: !Ref BotTokenParam
+          DEDUP_TABLE: !Ref DedupTable
+          COOKIES_BUCKET: !Ref CookiesBucket
+      Events:
+        Videos:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt VideoQueue.Arn
+            BatchSize: 1
+            # Лимит держим на источнике событий, а не через
+            # ReservedConcurrentExecutions: то упирается в квоту аккаунта
+            # и заодно отняло бы параллелизм у вебхука
+            ScalingConfig:
+              MaximumConcurrency: !Ref WorkerConcurrency
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DedupTable
+        - S3ReadPolicy:
+            BucketName: !Ref CookiesBucket
+        - !Ref SsmReadPolicy
+    Metadata:
+      Dockerfile: worker/Dockerfile
+      DockerContext: .
+      DockerTag: latest
+
+  # ---------- опрос фидов ----------
+
+  # страховка к push: хаб Google с 19.09.2026 не подтверждает подписки
+  PollFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/ingest/
+      Handler: poll.handler
+      Runtime: python3.12
+      Timeout: 60
+      Environment:
+        Variables:
+          CHANNEL_IDS: !Ref ChannelIds
+          QUEUE_URL: !Ref VideoQueue
+          SEEN_TABLE: !Ref SeenTable
+      Events:
+        Poll:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(15 minutes)
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt VideoQueue.QueueName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SeenTable
+
+  # ---------- продление подписки ----------
+
+  ResubscribeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/resubscribe/
+      Handler: app.handler
+      Runtime: python3.12
+      # 15 с из Globals не хватало: нужен запас на холодный старт boto3,
+      # чтение секрета и сам запрос к хабу
+      Timeout: 60
+      Environment:
+        Variables:
+          # URL известен прямо в шаблоне — двухфазный деплой не нужен
+          CALLBACK_URL: !GetAtt WebhookFunctionUrl.FunctionUrl
+          CHANNEL_IDS: !Ref ChannelIds
+          LEASE_SECONDS: !Ref LeaseSeconds
+          HUB_SECRET_PARAM: !Ref HubSecretParam
+      Events:
+        # дожимает неподтверждённую подписку, пока хаб Google отдаёт 503
+        Retry:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(1 hour)
+            Input: '{"force": false}'
+        # продление аренды: она живёт 5 суток, так что раз в сутки с запасом
+        Renew:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(1 day)
+            Input: '{"force": true}'
+      Policies:
+        - !Ref SsmReadPolicy
+
+  # ---------- общая политика чтения секретов ----------
+
+  SsmReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: ssm:GetParameter
+            Resource:
+              - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BotTokenParam}
+              - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${HubSecretParam}
+          - Effect: Allow
+            Action: kms:Decrypt
+            Resource: '*'
+            Condition:
+              StringEquals:
+                kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+
+Outputs:
+  WebhookUrl:
+    Description: Callback URL для PubSubHubbub
+    Value: !GetAtt WebhookFunctionUrl.FunctionUrl
+  QueueUrl:
+    Value: !Ref VideoQueue
+  DeadLetterQueueUrl:
+    Description: Сюда падают сообщения после трёх неудачных попыток
+    Value: !Ref VideoDLQ
+  ResubscribeFunctionName:
+    Value: !Ref ResubscribeFunction
+  CookiesBucketName:
+    Description: Сюда кладётся cookies.txt для yt-dlp
+    Value: !Ref CookiesBucket
